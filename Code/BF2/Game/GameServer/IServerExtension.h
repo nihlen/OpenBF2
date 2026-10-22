@@ -19,6 +19,11 @@
 namespace dice {
 namespace hfe {
 
+namespace world {
+class IObject;
+class IPlayer;
+} // namespace world
+
 class IServerExtension
 {
 public:
@@ -74,6 +79,116 @@ public:
     /// Must be called on the main thread.
     /// @return The status, or -1 when no game logic exists.
     virtual int getGameStatus() = 0;
+
+    // ---- v2 (openbf2-server-ext docs/protocol.md "v2", R5 in docs/admin-channel-draft.md) ----
+
+    /// One application of damage, as GameLogicDamage::serverGiveDamage hands it to the victim's
+    /// armour. Pointers are valid only for the duration of the observer call. Plain data, so the
+    /// module and the engine only have to agree on this layout.
+    struct DamageInfo
+    {
+        world::IObject* victim;        // the object owning the armour that takes the damage (a soldier or a vehicle)
+        world::IPlayer* attacker;      // credited player after the team filter, or null
+        world::IObject* source;        // the projectile or colliding object that caused it, or null
+        world::IObject* weapon;        // the attacker's weapon object, or null
+        world::IObject* vehicle;       // the attacker's vehicle, or null
+        float amount;                  // damage passed to the armour, after friendly-fire and vehicle modifiers
+        float hitPointsBefore;         // the armour's hit points just before
+        float hitPointsAfter;          // the armour's hit points just after
+        float maxHitPoints;            // the armour's maximum hit points
+        float position[3];             // world position the caller passed: the projectile's start for a
+                                       // projectile hit, the centre for an explosion, 0/0/0 for a bleed
+        float direction[3];            // the hit direction the caller passed
+        int material;                  // the material index the caller passed
+        world::IPlayer* const* killed; // players this application killed (PlayerKilled raised), killedCount long
+        int killedCount;
+    };
+
+    /// Receives every DamageInfo on the main thread. It must not call back into damage, kill or
+    /// object lifetime code, and must return quickly: it runs inside the damage path.
+    class IDamageObserver
+    {
+    public:
+        virtual void onDamage(const DamageInfo& info) = 0;
+
+    protected:
+        ~IDamageObserver() {}
+    };
+
+    /// Registers a damage observer (R5). Read-only: an observer cannot change or veto the damage.
+    /// Damage set outside GameLogicDamage::serverGiveDamage (Python setDamage, network replication,
+    /// fullDestroy, heals) is not observed. Must be called on the main thread.
+    /// @return False when observer is null, already registered, or the observer table is full.
+    virtual bool addDamageObserver(IDamageObserver* observer) = 0;
+
+    /// Removes an observer added with addDamageObserver. Must be called on the main thread.
+    virtual void removeDamageObserver(IDamageObserver* observer) = 0;
+
+    /// What the engine knows about a projectile beyond IObject (position) and its physics node
+    /// (velocity). IProjectileObject has no recovered virtual surface, so the engine reads it.
+    struct ProjectileInfo
+    {
+        bool active;                   // in flight; false once it has hit, expired or been cached
+        bool guided;                   // has a seek component (heat, laser, wire or TV guidance)
+        int ownerPlayerId;             // the firing player's id, or -1
+        int team;                      // the team of the PCO that fired it
+        world::IObject* launcherWeapon;   // or null
+        world::IObject* launcherVehicle;  // or null
+        world::IObject* target;        // the seek component's current target object, or null
+        float timeToLive;              // seconds left
+    };
+
+    /// Fills info for a projectile object (one answering IID_IProjectileObject). Main thread only.
+    /// @return False when object is null or not a projectile; info is unchanged then.
+    virtual bool getProjectileInfo(world::IObject* object, ProjectileInfo& info) = 0;
+
+    /// Told about every projectile a weapon launches, bullets included, right after it is
+    /// activated and given its velocity. Must return quickly; it runs inside the fire path.
+    class IProjectileObserver
+    {
+    public:
+        virtual void onProjectileLaunched(world::IObject* projectile, world::IPlayer* shooter) = 0;
+
+    protected:
+        ~IProjectileObserver() {}
+    };
+
+    /// @return False when observer is null, already registered, or the table is full.
+    virtual bool addProjectileObserver(IProjectileObserver* observer) = 0;
+    virtual void removeProjectileObserver(IProjectileObserver* observer) = 0;
+
+    /// One "spotted" radio message as SpottedEvent::executeServer relays it to the spotting
+    /// team's HUDs. The server keeps no spotted state; clients show a timed minimap marker.
+    struct SpotInfo
+    {
+        int connectionId;              // the sender's connection, or -1 when posted on the server
+        unsigned short spotterNetId;   // networkable id of the spotter's default vehicle (soldier)
+        unsigned short targetNetId;    // networkable id of the spotted object
+        int team;                      // the spotting team
+        float x, z;                    // the 2-D position the spotter sent
+        int vehicleType;               // world::VehicleType of the target
+    };
+
+    class ISpotObserver
+    {
+    public:
+        virtual void onSpotted(const SpotInfo& info) = 0;
+
+    protected:
+        ~ISpotObserver() {}
+    };
+
+    /// @return False when observer is null, already registered, or the table is full.
+    virtual bool addSpotObserver(ISpotObserver* observer) = 0;
+    virtual void removeSpotObserver(ISpotObserver* observer) = 0;
+
+    /// IGameLogic::getBeginRoundState: 0 announce, 1 waiting for players, 2 pre-round countdown,
+    /// 3 running. Module-created bots never count as players. @return The state, or -1 with no
+    /// game logic.
+    virtual int getBeginRoundState() = 0;
+
+    /// IGameLogic::getTimeToNextStateChange in seconds, or -1 with no game logic.
+    virtual float getTimeToNextStateChange() = 0;
 
 protected:
     ~IServerExtension() {}

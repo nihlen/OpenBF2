@@ -9,6 +9,7 @@
 #include "../../AI/AIInterface/AIInstance.h"     // aiInstance()->isBotsGame()  (ds:0x8AC37F8)
 #include "../../Core/EventManager.h"             // eventManager->postEvent
 #include "../../IO/BitStream.h"                  // readBits / writeBits
+#include "../GameServer/ServerExtensionHooks.h"  // [CHOSEN, not recovered] openbf2-server-ext v2
 
 namespace dice {
 namespace hfe {
@@ -58,6 +59,26 @@ void SpottedEvent::executeClient()
 // The received HUD event ID is forwarded without validation.
 bool SpottedEvent::executeServer(int connectionId)
 {
+    // [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md v2 item 6: tell the spot
+    // observers. Read-only; the retail body below is unchanged.
+    {
+        serverExtensionHooks::ObserverTable<IServerExtension::ISpotObserver>& observers =
+            serverExtensionHooks::spotObservers();
+        if (!observers.empty())
+        {
+            IServerExtension::SpotInfo info;
+            info.connectionId = connectionId;
+            info.spotterNetId = m_spotterVehicleNetId;
+            info.targetNetId = m_targetNetId;
+            info.team = m_team;
+            info.x = m_position.x;
+            info.z = m_position.y;   // Game::sendSpottedMessage packs the world x/z into this Vec2
+            info.vehicleType = static_cast<int>(m_vehicleType);
+            for (int i = 0; i < observers.size(); ++i)
+                observers.at(i)->onSpotted(info);
+        }
+    }
+
     {
         python::PyRef args = python::buildArgs(connectionId);
         python::pythonHost()->handleEvent(static_cast<ScriptEvent>(SCRIPT_EVENT_SPOTTED),
@@ -151,6 +172,17 @@ bool SpottedEvent::serialize(io::BitStream* stream)
     return false;
 }
 
+namespace serverExtensionHooks {
+
+// [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md v2 item 6. The table lives beside its
+// only notify site.
+ObserverTable<IServerExtension::ISpotObserver>& spotObservers()
+{
+    static ObserverTable<IServerExtension::ISpotObserver> table;
+    return table;
+}
+
+} // namespace serverExtensionHooks
 
 } // namespace hfe
 } // namespace dice

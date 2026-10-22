@@ -4,6 +4,8 @@
 
 #include "GameServer.h"
 #include "IServerExtension.h"              // [CHOSEN, not recovered] openbf2-server-ext R1
+#include "ServerExtensionHooks.h"          // [CHOSEN, not recovered] openbf2-server-ext R5
+#include "../Objects/Projectiles/GenericProjectile.h"   // [CHOSEN, not recovered] getProjectileInfo, v2
 #include "VoipServerConnection.h"
 #include "ClientInfo.h"                    // handleDataBlock parses a block-id-1 payload into one
 #include "../Persistence/AntiHacks.h"      // handleClientInfo's ranked name-hash record
@@ -211,6 +213,30 @@ public:
     virtual int listSpawnGroups(int team, SpawnGroupInfo* out, int capacity);   // protocol.md v1
     virtual bool restartRound();                                                // protocol.md v1
     virtual int getGameStatus() { return m_server && gameLogic ? gameLogic->getGameStatus() : -1; }   // v1
+    virtual bool addDamageObserver(IDamageObserver* observer)                    // protocol.md v2, R5
+    {
+        return serverExtensionHooks::damageObservers().add(observer);
+    }
+    virtual void removeDamageObserver(IDamageObserver* observer) { serverExtensionHooks::damageObservers().remove(observer); }
+    virtual bool getProjectileInfo(world::IObject* object, ProjectileInfo& info);   // protocol.md v2
+    virtual bool addProjectileObserver(IProjectileObserver* observer)
+    {
+        return serverExtensionHooks::projectileObservers().add(observer);
+    }
+    virtual void removeProjectileObserver(IProjectileObserver* observer)
+    {
+        serverExtensionHooks::projectileObservers().remove(observer);
+    }
+    virtual bool addSpotObserver(ISpotObserver* observer) { return serverExtensionHooks::spotObservers().add(observer); }
+    virtual void removeSpotObserver(ISpotObserver* observer) { serverExtensionHooks::spotObservers().remove(observer); }
+    virtual int getBeginRoundState()                                             // protocol.md v2
+    {
+        return m_server && gameLogic ? static_cast<int>(gameLogic->getBeginRoundState()) : -1;
+    }
+    virtual float getTimeToNextStateChange()
+    {
+        return m_server && gameLogic ? gameLogic->getTimeToNextStateChange() : -1.0f;
+    }
 
 private:
     GameServer* m_server;
@@ -441,6 +467,27 @@ bool GameServer::ServerExtension::restartRound()
     if (!m_server || !gameLogic)
         return false;
     static_cast<ServerGameLogic*>(gameLogic)->restartMap();
+    return true;
+}
+
+// [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md v2 item 5. GenericProjectile is the
+// sole implementor of IProjectileObject, the cast FireComp and GameLogicDamage already make.
+bool GameServer::ServerExtension::getProjectileInfo(world::IObject* object, ProjectileInfo& info)
+{
+    world::IProjectileObject* face =
+        object ? static_cast<world::IProjectileObject*>(object->queryInterface(world::IID_IProjectileObject)) : 0;
+    if (!face)
+        return false;
+    world::GenericProjectile* projectile = static_cast<world::GenericProjectile*>(face);
+    world::IPlayer* owner = projectile->getPlayer();
+    info.active = projectile->getIsActive();
+    info.guided = object->queryComponent(world::IID_IProjectileSeekComp, world::IID_IProjectileSeekComp) != 0;
+    info.ownerPlayerId = owner ? owner->getId() : -1;
+    info.team = projectile->getTeam();
+    info.launcherWeapon = projectile->getLauncherWeapon();
+    info.launcherVehicle = projectile->getLauncherVehicle();
+    info.target = projectile->getTargetObject();
+    info.timeToLive = projectile->getTimeToLive();
     return true;
 }
 

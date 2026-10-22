@@ -32,6 +32,7 @@
 #include "../../AI/AIInterface/AIInstance.h"               // ai::g_aiInstance - the team-kill AI event gate
 #include "../../AI/AIInterface/BFKnowledge/BFCollisionHandler.h"
 #include "../../AI/AIDLL/AI/Main/CommonSingletonServer.h"
+#include "../GameServer/ServerExtensionHooks.h"           // [CHOSEN, not recovered] openbf2-server-ext R5
 
 namespace dice {
 namespace hfe {
@@ -77,6 +78,39 @@ IObject* projectileObjectGetDesignatedTarget(void* projectileObject)
 int designatedTargetGetPlayerId(IObject* target)
 {
     return static_cast<TargetObject*>(target)->getTargetPlayerId();
+}
+
+// [CHOSEN, not recovered] openbf2-server-ext R5 (docs/protocol.md v2 item 8,
+// docs/admin-channel-draft.md R5): the record serverGiveDamage hands the damage observers. Not in
+// any retail image.
+const int kMaxObservedKills = 16;
+
+void notifyDamageObservers(IObject* owner, IPlayer* attacker, IObject* source, IObject* weapon, IObject* vehicle,
+                           float amount, float hitPointsBefore, IArmorGLComp* armor, const Vec3& position,
+                           const Vec3& direction, int material, IPlayer* const* killed, int killedCount)
+{
+    IServerExtension::DamageInfo info;
+    info.victim = owner;
+    info.attacker = attacker;
+    info.source = source;
+    info.weapon = weapon;
+    info.vehicle = vehicle;
+    info.amount = amount;
+    info.hitPointsBefore = hitPointsBefore;
+    info.hitPointsAfter = armor->getHitPoints();
+    info.maxHitPoints = armor->getMaxHitPoints();
+    info.position[0] = position.x;
+    info.position[1] = position.y;
+    info.position[2] = position.z;
+    info.direction[0] = direction.x;
+    info.direction[1] = direction.y;
+    info.direction[2] = direction.z;
+    info.material = material;
+    info.killed = killed;
+    info.killedCount = killedCount;
+    serverExtensionHooks::ObserverTable<IServerExtension::IDamageObserver>& table = serverExtensionHooks::damageObservers();
+    for (int i = 0; i < table.size(); ++i)
+        table.at(i)->onDamage(info);
 }
 } // namespace
 
@@ -445,6 +479,8 @@ void GameLogicDamage::serverGiveDamage(IObject* object, float damage, IPlayer* a
     }
 
     // the kills
+    IPlayer* killed[kMaxObservedKills];   // [CHOSEN, not recovered] openbf2-server-ext R5
+    int killedCount = 0;
     for (std::list<IPlayer*>::iterator v = victims.begin(); v != victims.end(); ++v)
     {
         IPlayer* victim = *v;
@@ -459,6 +495,9 @@ void GameLogicDamage::serverGiveDamage(IObject* object, float damage, IPlayer* a
                 python::PyRef args = python::buildArgs(victim, attacker, killerWeapon, assists, vehicle);
                 python::pythonHost()->handleEvent(static_cast<ScriptEvent>(1), args.get());
             }
+            // [CHOSEN, not recovered] openbf2-server-ext R5: remember the kill for the observers.
+            if (killedCount < kMaxObservedKills)
+                killed[killedCount++] = victim;
             KilledByData data;
             std::memset(&data, 0, sizeof(data));
             fillKilledByData(data, attacker, victim, weapon, vehicle, armor, material, vehicleKill);
@@ -486,11 +525,33 @@ void GameLogicDamage::serverGiveDamage(IObject* object, float damage, IPlayer* a
         IArmorGLComp* attackerArmor = findArmor(attacker->getVehicle(), dummy);   // +0x48
         perpetrator = attackerArmor == armor ? 0 : attacker;
     }
+    // [CHOSEN, not recovered] openbf2-server-ext R5 damage observer (docs/protocol.md v2 item 8,
+    // docs/admin-channel-draft.md R5). Read-only; the retail calls below are unchanged.
+    const bool observed = !serverExtensionHooks::damageObservers().empty();
+    const float hitPointsBefore = observed ? armor->getHitPoints() : 0.0f;
     armor->damage(damage, perpetrator);                                           // +0x40
+    if (observed)
+        notifyDamageObservers(owner, attacker, sourceObject, weapon, vehicle, damage, hitPointsBefore, armor,
+                              position, direction, material, killed, killedCount);
     if (fullDestroy)
         armor->fullDestroy();                                                     // +0x100
 }
 
 } // namespace world
+} // namespace hfe
+} // namespace dice
+
+namespace dice {
+namespace hfe {
+namespace serverExtensionHooks {
+
+// [CHOSEN, not recovered] openbf2-server-ext R5. The table lives beside its only notify site.
+ObserverTable<IServerExtension::IDamageObserver>& damageObservers()
+{
+    static ObserverTable<IServerExtension::IDamageObserver> table;
+    return table;
+}
+
+} // namespace serverExtensionHooks
 } // namespace hfe
 } // namespace dice

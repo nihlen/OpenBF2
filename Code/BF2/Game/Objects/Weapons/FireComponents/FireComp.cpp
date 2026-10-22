@@ -39,6 +39,7 @@
 #include "../../../../Core/Debug.h"
 #include "../../../../Core/Ids.h"
 #include "../../../../IO/Stream/IStream.h"
+#include "../../../GameServer/ServerExtensionHooks.h"   // [CHOSEN, not recovered] openbf2-server-ext v2
 
 namespace dice {
 namespace hfe {
@@ -1118,6 +1119,15 @@ IObject* FireComp::setupProjectile(const Mat4& transform, Vec3& velocity)
 
         m_lastFiredProjectileId = static_cast<int>(object->getObjectId());
 
+        // [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md v2 item 5: tell the
+        // projectile observers. Read-only; nothing else in this path changes.
+        {
+            serverExtensionHooks::ObserverTable<IServerExtension::IProjectileObserver>& observers =
+                serverExtensionHooks::projectileObservers();
+            for (int i = 0; i < observers.size(); ++i)
+                observers.at(i)->onProjectileLaunched(object, player);
+        }
+
         if (projectile->hasTracer())
         {
             --m_postReloadState;
@@ -1233,5 +1243,17 @@ IObject* FireComp::setupProjectile(const Mat4& transform, Vec3& velocity)
 }
 
 } // namespace world
+
+namespace serverExtensionHooks {
+
+// [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md v2 item 5. The table lives beside its
+// only notify site.
+ObserverTable<IServerExtension::IProjectileObserver>& projectileObservers()
+{
+    static ObserverTable<IServerExtension::IProjectileObserver> table;
+    return table;
+}
+
+} // namespace serverExtensionHooks
 } // namespace hfe
 } // namespace dice
