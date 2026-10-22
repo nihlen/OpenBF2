@@ -42,6 +42,39 @@ public:
     /// @return The lowest matching group id, or -1 when none matches or no spawn manager exists.
     virtual int findSpawnGroup(int team, bool enterOnSpawn) = 0;
 
+    /// One spawn group as listSpawnGroups reports it. Plain data, so the module and the engine
+    /// only have to agree on this layout, not on SpawnGroup's.
+    struct SpawnGroupInfo
+    {
+        int id;
+        int squad;                  // ISpawnGroup::getSquad; > 0 is a squad group
+        int pointCount;             // spawn points in the group
+        int enterOnSpawnPoints;     // points with getEnterOnSpawn() or getAIEnterOnSpawn()
+        bool active;                // getActive(true): at least one point free for an AI player
+        bool onlyForHuman;          // ISpawnGroup::getOnlyForHuman
+        float x, y, z;              // ISpawnGroup::getPos, the average of the points
+    };
+
+    /// Lists every spawn group the spawn manager has for a team (same team, at least one spawn
+    /// point), active or not, in map-key order. Must be called on the main thread.
+    /// @param team Team number, as IPlayer::getTeam reports it.
+    /// @param out Receives at most capacity entries; may be null when capacity is 0.
+    /// @return The number of groups the team has, which can exceed capacity; 0 with no spawn
+    ///         manager or no level loaded.
+    virtual int listSpawnGroups(int team, SpawnGroupInfo* out, int capacity) = 0;
+
+    /// Restarts the current round without reloading the map, exactly as the admin.restartMap
+    /// console command does. Every player is reset and waits to respawn. Must be called on the
+    /// main thread.
+    /// @return False when no server game logic exists; nothing happens then.
+    virtual bool restartRound() = 0;
+
+    /// The game logic's status, as IGameLogic::getGameStatus reports it. Dead players are only
+    /// respawned while it is 1 (playing); the module pauses its spawn-fallback timers otherwise.
+    /// Must be called on the main thread.
+    /// @return The status, or -1 when no game logic exists.
+    virtual int getGameStatus() = 0;
+
 protected:
     ~IServerExtension() {}
 };

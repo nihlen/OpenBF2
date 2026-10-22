@@ -208,6 +208,9 @@ public:
     }
 
     virtual int findSpawnGroup(int team, bool enterOnSpawn);
+    virtual int listSpawnGroups(int team, SpawnGroupInfo* out, int capacity);   // protocol.md v1
+    virtual bool restartRound();                                                // protocol.md v1
+    virtual int getGameStatus() { return m_server && gameLogic ? gameLogic->getGameStatus() : -1; }   // v1
 
 private:
     GameServer* m_server;
@@ -390,6 +393,55 @@ int GameServer::ServerExtension::findSpawnGroup(int team, bool enterOnSpawn)
             return *it;
     }
     return -1;
+}
+
+// [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md v1, "Blocked spawns". Reports what
+// the module's spawn fallback needs through the same typed ISpawnGroup/ISpawnPoint calls as
+// findSpawnGroup; it changes no spawn state.
+int GameServer::ServerExtension::listSpawnGroups(int team, SpawnGroupInfo* out, int capacity)
+{
+    if (!m_server || !spawnManager)
+        return 0;
+
+    SpawnManager* spawn = static_cast<SpawnManager*>(spawnManager);
+    const std::list<int>& groups = spawn->getGroupsForTeam(team);
+    int count = 0;
+    for (std::list<int>::const_iterator it = groups.begin(); it != groups.end(); ++it)
+    {
+        ISpawnGroup* group = spawn->getSpawnGroup(*it);
+        if (!group)
+            continue;
+        if (out && count < capacity)
+        {
+            SpawnGroupInfo& info = out[count];
+            const std::vector<ISpawnPoint*>& points = group->getSpawnPoints();
+            info.id = *it;
+            info.squad = group->getSquad();
+            info.pointCount = static_cast<int>(points.size());
+            info.enterOnSpawnPoints = 0;
+            for (std::vector<ISpawnPoint*>::const_iterator p = points.begin(); p != points.end(); ++p)
+                if (*p && ((*p)->getEnterOnSpawn() || (*p)->getAIEnterOnSpawn()))
+                    ++info.enterOnSpawnPoints;
+            info.active = group->getActive(true);
+            info.onlyForHuman = group->getOnlyForHuman();
+            const Vec3& pos = group->getPos();
+            info.x = pos.x;
+            info.y = pos.y;
+            info.z = pos.z;
+        }
+        ++count;
+    }
+    return count;
+}
+
+// [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md v1, "Blocked spawns". The body of
+// the admin.restartMap console command (BanListConsole.cpp adminRestartMap).
+bool GameServer::ServerExtension::restartRound()
+{
+    if (!m_server || !gameLogic)
+        return false;
+    static_cast<ServerGameLogic*>(gameLogic)->restartMap();
+    return true;
 }
 
 // Creates a player using a name truncated to 23 characters, retrying with ID/numeric suffixes.
