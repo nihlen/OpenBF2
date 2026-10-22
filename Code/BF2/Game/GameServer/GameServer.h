@@ -350,6 +350,15 @@ public:
     unsigned int m_clientAckedEndOfRoundGuard;                // +0x160 = 0
     IPlayerUnlockInfo* m_playerUnlockInfo;                    // +0x164 = 0
     bool    m_pythonValid[2];                                 // +0x168/+0x169 = false
+
+    // [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md R1. Non-virtual and no data
+    // members, so GameServer's layout and vtables are unchanged. ServerExtension is the
+    // IServerExtension adapter defined in GameServer.cpp.
+private:
+    class ServerExtension;
+
+    // createPlayer after its AI-library gate: id choice, creation, broadcasts and VoIP session.
+    int createPlayerUngated(const std::string& name, bool isAI);
 };
 
 } // namespace hfe

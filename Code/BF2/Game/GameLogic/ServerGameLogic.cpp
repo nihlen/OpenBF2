@@ -3412,6 +3412,10 @@ bool ServerGameLogic::handleCollisionForResurrecter(world::IObject* projectile,
     {
         ai::IAIPlayerCourier* const courier = static_cast<ai::IAIPlayerCourier*>(
             ai::BFSingletonServer::m_iaiPlayerCourier);
+        // [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md R1b: retail has no null
+        // check; without the AI library there is no resurrect target.
+        if (!courier)
+            return false;
         world::IObject* const aiTarget = courier->getResurrectTarget(owner->getId());
         if (!aiTarget)
             return false;

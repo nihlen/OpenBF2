@@ -323,10 +323,13 @@ IPlayerControlObject* BFfindEntryPoint(const Vec3& position, float radius, int t
         radius              = 15.0f;                                // flt_888D944 overrides the caller
         isAI                = true;
         useEntryPointRadius = false;
-        // no null check on the singleton, as shipped.
-        aiRequestedVehicle = static_cast<ai::IAIPlayerCourier*>(
-            ai::BFSingletonServer::m_iaiPlayerCourier)
-                ->getRequestedVehicle(player->getId());             // ds:0x8AC35A0 +0x08 / IPlayer +0x54
+        // Retail has no null check on the courier. [CHOSEN, not recovered] openbf2-server-ext
+        // docs/protocol.md R1b: without the AI library the courier is null, which is treated as
+        // no requested vehicle, so the AI-flagged player takes the nearest free seat in range.
+        if (ai::BFSingletonServer::m_iaiPlayerCourier)
+            aiRequestedVehicle = static_cast<ai::IAIPlayerCourier*>(
+                ai::BFSingletonServer::m_iaiPlayerCourier)
+                    ->getRequestedVehicle(player->getId());         // ds:0x8AC35A0 +0x08 / IPlayer +0x54
     }
 
     // the two grid passes, copied out of the manager's shared scratch vector

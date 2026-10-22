@@ -3,6 +3,7 @@
 // Keep the recovered lifecycle and dispatch ordering; method-level exceptions remain at their sites.
 
 #include "GameServer.h"
+#include "IServerExtension.h"              // [CHOSEN, not recovered] openbf2-server-ext R1
 #include "VoipServerConnection.h"
 #include "ClientInfo.h"                    // handleDataBlock parses a block-id-1 payload into one
 #include "../Persistence/AntiHacks.h"      // handleClientInfo's ranked name-hash record
@@ -45,6 +46,7 @@
 #include "VoipServerConnection.h"              // CreateClientSessionId
 #include "../GameLogic/SpawnSystem/SpawnManager.h"   // createAndSpawnAIPlayer
 #include "../GameLogic/SpawnSystem/SpawnGroup.h"     // ISpawnGroup::getActive
+#include "../Objects/ISpawnPoint.h"                  // [CHOSEN, not recovered] findSpawnGroup, R1
 #include "../../AI/AIInterface/AIInstance.h"   // g_aiInstance - the "AI enabled" test
 #include "../../AI/AIInterface/IAIEventCourier.h" // missile-lock delivery to AI occupants
 #include "../../AI/AIInterface/SingletonServer.h" // cached AI courier refresh table
@@ -190,6 +192,34 @@ void cdkey_auth_callback(int localId, AuthResult result, void* context)
 
 } // namespace
 
+// [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md R1. Adapter that publishes
+// IServerExtension for this server. A separate object rather than a fourth GameServer base, so
+// GameServer's layout, base offsets and vtables stay as recovered.
+class GameServer::ServerExtension : public IServerExtension
+{
+public:
+    ServerExtension() : m_server(0) {}
+
+    void setServer(GameServer* server) { m_server = server; }
+
+    virtual int createInputPlayer(const std::string& name)
+    {
+        return m_server ? m_server->createPlayerUngated(name, true) : -1;
+    }
+
+    virtual int findSpawnGroup(int team, bool enterOnSpawn);
+
+private:
+    GameServer* m_server;
+};
+
+namespace {
+const char* const kServerExtensionSingleton = "OpenBF2ServerExtension";
+// The address of this pointer is the singleton's instance slot (flag 4, borrowed). It points at
+// the adapter owned by GameServer::init while the singleton is registered, and is null otherwise.
+IServerExtension* g_serverExtension = 0;
+} // namespace
+
 // Initializes server services, matchmaking, and the Python fingerprint.
 // LAN initialization still follows this service setup.
 bool GameServer::init()
@@ -259,6 +289,17 @@ bool GameServer::init()
     if (ranked)
         m_statsManager->connect(); // result deliberately discarded before Python initialization
 
+    // [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md R1. Publish IServerExtension
+    // before openbf2.con runs, so a module's initDll can fetch it.
+    {
+        static ServerExtension extension;
+        extension.setServer(this);
+        g_serverExtension = &extension;
+        SingletonRegInfo info = { std::string(kServerExtensionSingleton),
+                                  reinterpret_cast<IBase**>(&g_serverExtension), 0, 0, 4 };
+        classManager->registerSingleton(info);
+    }
+
     // [CHOSEN, not recovered] Run the active mod's optional openbf2.con before Python init, so an
     // openbf2.* command in it (e.g. addModDll of a dice_py-hooking shim such as bf2hub) takes effect
     // before the Python host comes up. Absent file is not an error. Loaded with relative paths off
@@ -321,6 +362,36 @@ bool GameServer::init()
 // Client admission starts with a mod-specific challenge; the connection map uses byte keys.
 extern IBase* spawnManager;
 
+// [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md R1. Uses the same typed lookup as
+// createAndSpawnAIPlayer (getGroupsForTeam, then getSpawnGroup and getActive(true)) and adds the
+// per-point enter-on-spawn test that ServerGameLogic::spawnPlayer applies to an AI player.
+int GameServer::ServerExtension::findSpawnGroup(int team, bool enterOnSpawn)
+{
+    if (!m_server || !spawnManager)
+        return -1;
+
+    SpawnManager* spawn = static_cast<SpawnManager*>(spawnManager);
+    const std::list<int>& groups = spawn->getGroupsForTeam(team);
+    for (std::list<int>::const_iterator it = groups.begin(); it != groups.end(); ++it)
+    {
+        ISpawnGroup* group = spawn->getSpawnGroup(*it);
+        if (!group || !group->getActive(true))
+            continue;
+
+        const std::vector<ISpawnPoint*>& points = group->getSpawnPoints();
+        bool matches = !points.empty();
+        for (std::vector<ISpawnPoint*>::const_iterator p = points.begin(); matches && p != points.end(); ++p)
+        {
+            ISpawnPoint* point = *p;
+            const bool pointEnters = point && (point->getEnterOnSpawn() || point->getAIEnterOnSpawn());
+            matches = point && pointEnters == enterOnSpawn;
+        }
+        if (matches)
+            return *it;
+    }
+    return -1;
+}
+
 // Creates a player using a name truncated to 23 characters, retrying with ID/numeric suffixes.
 // Retries have no failure limit, so persistent failures other than name collisions can loop forever.
 // The player's network ID is player ID plus one.
@@ -364,8 +435,6 @@ world::IPlayer* GameServer::createPlayerWithValidName(const std::string& name, i
 // Bot creation requires the AI singleton.
 int GameServer::createPlayer(const std::string& name, bool isAI)
 {
-    int id = 255;
-
     if (isAI)
     {
         if (!ai::g_aiInstance)  // ds:0x8AC37F8
@@ -374,7 +443,20 @@ int GameServer::createPlayer(const std::string& name, bool isAI)
                 << "Failed to create ai player, AI not enabled.";
             return -1;
         }
+    }
 
+    return createPlayerUngated(name, isAI);
+}
+
+// [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md R1: the retail createPlayer body after
+// its AI-library gate, split out unchanged so IServerExtension::createInputPlayer can reach it
+// without the AI library. createPlayer's observable behaviour is unchanged.
+int GameServer::createPlayerUngated(const std::string& name, bool isAI)
+{
+    int id = 255;
+
+    if (isAI)
+    {
         // First free id, counting down. The start point already skips as many slots as there are
         // players, so the search is usually one test long.
         for (id = 255 - world::playerManager->getNumberOfPlayers();
@@ -1837,6 +1919,14 @@ void GameServer::shutdown()
     }
     if (m_statsManager)
         m_statsManager->release();
+
+    // [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md R1. Withdraw IServerExtension.
+    if (g_serverExtension)
+    {
+        classManager->unregisterSingleton(std::string(kServerExtensionSingleton));
+        static_cast<ServerExtension*>(g_serverExtension)->setServer(0);
+        g_serverExtension = 0;
+    }
 
     m_shutdownComplete = true;
     eventManager->unregisterEventHandler(ECGameLogic, this);
@@ -3337,6 +3427,10 @@ void GameServer::sendMissileMessageToOccupyingPlayers(
             continue;
         }
 
+        // [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md R1b: retail has no null
+        // check; without the AI library there is no courier to notify.
+        if (!ai::BFSingletonServer::m_iaiEventCourier)
+            continue;
         ai::BFSingletonServer::m_iaiEventCourier->eventMissileLock(
             static_cast<ai::IAIObject*>(L::aiObject(vehicle)), &message);
     }
