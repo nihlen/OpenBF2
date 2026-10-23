@@ -6,6 +6,11 @@
 #include "IServerExtension.h"              // [CHOSEN, not recovered] openbf2-server-ext R1
 #include "ServerExtensionHooks.h"          // [CHOSEN, not recovered] openbf2-server-ext R5
 #include "../Objects/Projectiles/GenericProjectile.h"   // [CHOSEN, not recovered] getProjectileInfo, v2
+#include "../GameEvents/MedalEvent.h"                   // [CHOSEN, not recovered] admin channel: sendMedalEvent
+#include "../GameEvents/RankEvent.h"                    // [CHOSEN, not recovered] admin channel: setRank
+#include "../GameLogic/ScoreSystem/ScoreManager.h"      // [CHOSEN, not recovered] admin channel: getRoundInfo
+#include "../MapList.h"                                 // [CHOSEN, not recovered] admin channel: getMapList
+#include "../../Scene/Object/PlayerScoreData.h"         // [CHOSEN, not recovered] admin channel: setRank
 #include "VoipServerConnection.h"
 #include "ClientInfo.h"                    // handleDataBlock parses a block-id-1 payload into one
 #include "../Persistence/AntiHacks.h"      // handleClientInfo's ranked name-hash record
@@ -237,6 +242,29 @@ public:
     {
         return m_server && gameLogic ? gameLogic->getTimeToNextStateChange() : -1.0f;
     }
+    virtual bool setScriptEventListener(IScriptEventListener* listener)          // admin channel, R4
+    {
+        IScriptEventListener*& slot = serverExtensionHooks::scriptEventListener();
+        if (listener && slot && slot != listener)
+            return false;
+        slot = listener;
+        return true;
+    }
+    virtual bool getServerInfo(ServerInfo& out);
+    virtual bool getRoundInfo(RoundInfo& out);
+    virtual std::string getTeamName(int team)
+    {
+        return m_server && gameLogic ? gameLogic->getTeamName(team) : std::string();
+    }
+    virtual std::string getCdKeyHash(int playerId);
+    virtual int getDisconnectReason(int playerId);
+    virtual int getMapList(MapListEntry* out, int capacity, int& currentIndex);
+    virtual bool runMapListEntry(int index);
+    virtual bool sendGameLogicEvent(int playerId, int eventId, int data);
+    virtual bool sendHudEvent(int playerId, int eventId, int data);
+    virtual bool sendMedalEvent(int playerId, int medal, int value);
+    virtual bool setRank(int playerId, int rank, bool sendEvent);
+    virtual bool killPlayer(int playerId);
 
 private:
     GameServer* m_server;
@@ -468,6 +496,156 @@ bool GameServer::ServerExtension::restartRound()
         return false;
     static_cast<ServerGameLogic*>(gameLogic)->restartMap();
     return true;
+}
+
+namespace world { extern IBase* scoreManager; }   // Core/Globals.cpp, as EndOfRoundEvent.cpp declares it
+
+// [CHOSEN, not recovered] openbf2-server-ext docs/admin-channel-draft.md, appended getters and
+// commands for the admin channel (layouts in docs/findings/admin-phase1.md). Each reads or calls
+// what the matching console command or Python wrapper does; none changes a retail body.
+bool GameServer::ServerExtension::getServerInfo(ServerInfo& out)
+{
+    if (!m_server || !serverSettings)
+        return false;
+    std::strncpy(out.serverName, serverSettings->m_serverName.c_str(), sizeof(out.serverName) - 1);
+    out.serverName[sizeof(out.serverName) - 1] = 0;
+    out.gamePort = serverSettings->m_serverPort;
+    out.gameSpyPort = serverSettings->m_gameSpyPort;
+    out.maxPlayers = serverSettings->getMaxPlayers();
+    out.timeLimit = serverSettings->m_timeLimit;
+    out.roundsPerMap = serverSettings->m_roundsPerMap;
+    out.internet = serverSettings->m_internet;
+    out.ranked = serverSettings->m_ranked;
+    return true;
+}
+
+bool GameServer::ServerExtension::getRoundInfo(RoundInfo& out)
+{
+    if (!m_server || !gameLogic)
+        return false;
+    ServerGameLogic* const logic = static_cast<ServerGameLogic*>(gameLogic);
+    out.tickets[0] = static_cast<int>(logic->getNumberOfTickets(1));
+    out.tickets[1] = static_cast<int>(logic->getNumberOfTickets(2));
+    world::ScoreManager* const scores = reinterpret_cast<world::ScoreManager*>(world::scoreManager);
+    out.winner = scores ? scores->getWinner() : 0;
+    out.victoryType = scores ? scores->getVictoryType() : 0;
+    const unsigned int start = logic->getServerExtRoundStartTick();
+    out.roundTime = start == static_cast<unsigned int>(-1)
+                        ? -1.0f
+                        : static_cast<float>(WorldPref::getTickCount() - start) / 30.0f;
+    out.roundsPlayed = logic->getServerExtRoundsPlayed();
+    return true;
+}
+
+// admin.listPlayers' lookup (GameServer::listPlayers): remote players only, by player id.
+std::string GameServer::ServerExtension::getCdKeyHash(int playerId)
+{
+    world::IPlayer* const player = world::playerManager->getPlayerFromId(playerId);
+    if (!m_server || !player || !player->getIsRemote())
+        return std::string();
+    const char* const hash = gcd_getkeyhash(gamespy::g_gameID, playerId);
+    return hash ? std::string(hash) : std::string();
+}
+
+int GameServer::ServerExtension::getDisconnectReason(int playerId)
+{
+    if (!m_server)
+        return -1;
+    std::map<int, DisconnectType>::const_iterator it = m_server->m_disconnectTypes.find(playerId);
+    return it == m_server->m_disconnectTypes.end() ? -1 : static_cast<int>(it->second.reason);
+}
+
+int GameServer::ServerExtension::getMapList(MapListEntry* out, int capacity, int& currentIndex)
+{
+    currentIndex = -1;
+    if (!m_server || !mapList)
+        return 0;
+    const int count = mapList->getMapCount();
+    currentIndex = mapList->getCurrentMap();
+    for (int i = 0; i < count && i < capacity && out; ++i)
+    {
+        const MapList::Entry* const entry = mapList->getEntry(i);
+        MapListEntry& e = out[i];
+        e.name[0] = e.gameMode[0] = 0;
+        e.size = 0;
+        if (!entry)
+            continue;
+        std::strncpy(e.name, entry->name.c_str(), sizeof(e.name) - 1);
+        e.name[sizeof(e.name) - 1] = 0;
+        std::strncpy(e.gameMode, entry->gameMode.c_str(), sizeof(e.gameMode) - 1);
+        e.gameMode[sizeof(e.gameMode) - 1] = 0;
+        e.size = entry->mapSize;
+    }
+    return count;
+}
+
+// admin.nextLevel index, then admin.runNextLevel (BanListConsole.cpp adminSetNextLevel and
+// adminRunNextLevel).
+bool GameServer::ServerExtension::runMapListEntry(int index)
+{
+    if (!m_server || !gameLogic)
+        return false;
+    ServerGameLogic* const logic = static_cast<ServerGameLogic*>(gameLogic);
+    if (index >= 0)
+    {
+        if (!mapList || index >= mapList->getMapCount())
+            return false;
+        logic->setNextLevel(index);
+    }
+    logic->runNextLevel();
+    return true;
+}
+
+// The bodies of Python's sgl_sendGameLogicEvent, sgl_sendHudEvent, sgl_sendMedalEvent and
+// sgl_sendRankEvent (ServerGameLogic.cpp), with the event-id bounds they apply.
+bool GameServer::ServerExtension::sendGameLogicEvent(int playerId, int eventId, int data)
+{
+    if (!m_server || static_cast<unsigned int>(eventId) > 24)
+        return false;
+    int payload = data;
+    game->sendGameEventIfConnected(static_cast<unsigned int>(playerId),
+        new PostRemoteEvent(ECGameLogic, static_cast<unsigned int>(eventId), playerId, &payload, 4, 0.0f));
+    return true;
+}
+
+bool GameServer::ServerExtension::sendHudEvent(int playerId, int eventId, int data)
+{
+    if (!m_server || static_cast<unsigned int>(eventId) > 78)
+        return false;
+    int payload = data;
+    game->sendGameEventIfConnected(static_cast<unsigned int>(playerId),
+        new PostRemoteEvent(ECHud, static_cast<unsigned int>(eventId), playerId, &payload, 4, 0.0f));
+    return true;
+}
+
+bool GameServer::ServerExtension::sendMedalEvent(int playerId, int medal, int value)
+{
+    if (!m_server || !game)
+        return false;
+    game->sendGameEventToAllPlaying(new MedalEvent(static_cast<world::Medal>(medal), playerId, value));
+    return true;
+}
+
+// mm_webadmin's rank command: sendRankEvent, then score.rank (PythonHost.cpp pmgr_setScore).
+bool GameServer::ServerExtension::setRank(int playerId, int rank, bool sendEvent)
+{
+    world::IPlayer* const player = world::playerManager->getPlayerFromId(playerId);
+    if (!m_server || !player || !player->getScoreData())
+        return false;
+    if (sendEvent)
+        game->sendGameEventToAllPlaying(new RankEvent(static_cast<RankEvent::RankEventTypes>(1),
+                                                      static_cast<unsigned int>(rank), 0, playerId));
+    player->getScoreData()->setRank(static_cast<unsigned int>(rank), player);
+    return true;
+}
+
+// The call GameLogicDamage::serverGiveDamage makes for a death without an attacker.
+bool GameServer::ServerExtension::killPlayer(int playerId)
+{
+    world::IPlayer* const player = world::playerManager->getPlayerFromId(playerId);
+    if (!m_server || !gameLogic || !player || !player->getIsAlive())
+        return false;
+    return gameLogic->killPlayer(player, true, true);
 }
 
 // [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md v2 item 5. GenericProjectile is the

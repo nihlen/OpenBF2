@@ -1,5 +1,6 @@
 // [CHOSEN, not recovered] OpenBF2 server-extension surface for native modules. No retail image has
-// it. Design record: openbf2-server-ext docs/protocol.md R1 (local design; no upstream issue yet).
+// it. Design record: openbf2-server-ext docs/protocol.md R1, and docs/admin-channel-draft.md R4 and
+// R5 (local design; no upstream issue yet).
 //
 // GameServer publishes one instance as the named singleton "OpenBF2ServerExtension" (flag 4,
 // borrowed; ClassManager does not own or release it) before the mod's openbf2.con runs. A module
@@ -189,6 +190,125 @@ public:
 
     /// IGameLogic::getTimeToNextStateChange in seconds, or -1 with no game logic.
     virtual float getTimeToNextStateChange() = 0;
+
+    // ---- admin channel phase 1 (openbf2-server-ext docs/admin-channel-draft.md, R4 and the
+    // appended getters; layouts in docs/findings/admin-phase1.md) ----
+
+    /// One argument of a script event, decoded back from the Python tuple the engine built for
+    /// PythonHost::handleEvent. Plain data; every pointer is valid only during the listener call.
+    struct ScriptEventArg
+    {
+        enum Kind { None = 0, Int = 1, Float = 2, String = 3, Player = 4, Object = 5, Tuple = 6 };
+        int kind;
+        int i;                         // Int: the value (Python bools too); Player: the player id
+        double f;                      // Float: the value
+        const char* s;                 // String: the bytes, borrowed from the Python string
+        int sLength;
+        world::IPlayer* player;        // Player: getPlayerFromId(id), may be null
+        world::IObject* object;        // Object: null when the wrapped object is gone
+        int first;                     // Tuple: the index of its first item in the same array
+        int count;                     // Tuple: its item count (items may be tuples again)
+    };
+
+    /// Receives every script event the engine dispatches, before Python's handlers run and whether
+    /// or not a handler is registered. args[0..argc) are the event's top-level arguments; a Tuple
+    /// argument's items follow later in the same array. The listener must only read engine state
+    /// and copy what it needs: no Python, no console, no object creation or deletion, no damage or
+    /// kills. Main thread only.
+    class IScriptEventListener
+    {
+    public:
+        virtual void onScriptEvent(int eventId, const ScriptEventArg* args, int argc) = 0;
+
+    protected:
+        ~IScriptEventListener() {}
+    };
+
+    /// Sets the single script-event listener (R4); null clears it. Nothing is decoded while no
+    /// listener is set. Main thread only.
+    /// @return False when another listener is already set.
+    virtual bool setScriptEventListener(IScriptEventListener* listener) = 0;
+
+    /// Server settings a module cannot read through a typed interface.
+    struct ServerInfo
+    {
+        char serverName[256];          // sv.serverName, Windows-1252, NUL-terminated (IGameServer::getName is
+                                       // the network listener's name, which can be empty)
+        int gamePort;                  // sv.serverPort
+        int gameSpyPort;               // sv.gameSpyPort
+        int maxPlayers;                // sv.maxPlayers, as the server reports it (ServerSettings::getMaxPlayers)
+        int timeLimit;                 // sv.timeLimit, seconds; 0 for none
+        int roundsPerMap;              // sv.roundsPerMap
+        bool internet;                 // sv.internet
+        bool ranked;                   // sv.ranked
+    };
+
+    /// @return False with no server settings; out is unchanged then.
+    virtual bool getServerInfo(ServerInfo& out) = 0;
+
+    /// The current round, from the server game logic and the score manager.
+    struct RoundInfo
+    {
+        int tickets[2];                // teams 1 and 2 (ServerGameLogic::getNumberOfTickets)
+        int winner;                    // ScoreManager::getWinner: the last round's winner, 0 if none
+        int victoryType;               // ScoreManager::getVictoryType
+        float roundTime;               // seconds since the round started, -1 when not started
+        int roundsPlayed;              // rounds played on this map
+    };
+
+    /// @return False with no server game logic; out is unchanged then. Main thread only.
+    virtual bool getRoundInfo(RoundInfo& out) = 0;
+
+    /// IGameLogic::getTeamName. @return An empty string with no game logic.
+    virtual std::string getTeamName(int team) = 0;
+
+    /// The GameSpy CD-key hash the server holds for a remote player, as admin.listPlayers shows it
+    /// (gcd_getkeyhash). @return An empty string when the server has none: on a LAN server
+    /// (sv.internet 0) the GameSpy authenticator never stores one, and bots have none.
+    virtual std::string getCdKeyHash(int playerId) = 0;
+
+    /// The reason the server recorded for disconnecting a connection that is about to be torn
+    /// down (for example 21 kicked, 10 timed out, 13 refused or dropped). It exists while the
+    /// player is destroyed by the network pass, so a PlayerDisconnect listener can read it.
+    /// @return The engine's result code, or -1 when none is pending.
+    virtual int getDisconnectReason(int playerId) = 0;
+
+    /// One map-rotation entry.
+    struct MapListEntry
+    {
+        char name[64];
+        char gameMode[32];
+        int size;
+    };
+
+    /// Copies the map rotation (maplist.list). @param currentIndex receives the current entry, -1
+    /// if none. @return The number of entries, which can exceed capacity.
+    virtual int getMapList(MapListEntry* out, int capacity, int& currentIndex) = 0;
+
+    /// Ends the round and loads a map-rotation entry: the next one for -1 (admin.runNextLevel),
+    /// else admin.nextLevel index followed by admin.runNextLevel. Main thread only.
+    /// @return False with no server game logic or an index outside the rotation.
+    virtual bool runMapListEntry(int index) = 0;
+
+    /// Python's bf2.gameLogic.sendGameEvent: a PostRemoteEvent(ECGameLogic, eventId) with a 4-byte
+    /// payload to that player's connection. @return False for an event id above 24.
+    virtual bool sendGameLogicEvent(int playerId, int eventId, int data) = 0;
+
+    /// Python's sendHudEvent: a PostRemoteEvent(ECHud, eventId). @return False above 78.
+    virtual bool sendHudEvent(int playerId, int eventId, int data) = 0;
+
+    /// Python's sendMedalEvent: a MedalEvent to every playing client. @return False with no game.
+    virtual bool sendMedalEvent(int playerId, int medal, int value) = 0;
+
+    /// Sets a player's rank (PlayerScoreData::setRank, as Python's score.rank) and, with
+    /// sendEvent, first sends the RankEvent Python's sendRankEvent sends.
+    /// @return False when the player does not exist.
+    virtual bool setRank(int playerId, int rank, bool sendEvent) = 0;
+
+    /// Kills a living player as a death without a killer: ServerGameLogic::killPlayer(player, true,
+    /// true), which raises script event 3 (PlayerDeath). Main thread only.
+    /// @return False when the player does not exist, is dead, or no server game logic exists.
+    virtual bool killPlayer(int playerId) = 0;
 
 protected:
     ~IServerExtension() {}

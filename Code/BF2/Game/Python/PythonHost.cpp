@@ -6,6 +6,7 @@
 #include "py/PyArg.h"                     // py_arg<std::string> - log_write unpacks with it
 #include "PythonComp.h"
 #include "PythonHost.h"
+#include "../GameServer/ServerExtensionHooks.h"   // [CHOSEN, not recovered] R4 script-event listener
 #include "../../Core/Debug.h"
 #include "../../Core/EventManager.h"        // registerEventHandler, in initialize()
 #include "../../Core/SettingsRepostitory.h" // GSModDirectory, in initialize()
@@ -792,6 +793,126 @@ PythonHostData::~PythonHostData()
     // nested-vector walk are.
 }
 
+// [CHOSEN, not recovered] openbf2-server-ext docs/admin-channel-draft.md R4: the script-event
+// observer. No retail image has it. handleEvent hands every event's argument tuple, decoded back to
+// typed values, to the module listener set through IServerExtension::setScriptEventListener,
+// before the Python handlers run. Python's own behaviour does not change: the decoder only reads
+// the tuple and clears any error it causes.
+namespace {
+
+const int kMaxScriptEventArgs = 64;
+const int kMaxScriptEventDepth = 3;
+
+IServerExtension::IScriptEventListener* g_scriptEventListener = 0;
+
+typedef IServerExtension::ScriptEventArg ScriptEventArg;
+
+// Decodes o into out. A tuple's items get a contiguous block after `used` in args. Players are the
+// converter's wrappers (an int "index" attribute), objects the wrappers with a PyCObject "token"
+// (py/Objects.cpp wrapObject); anything else, or any Python error, decodes as None.
+void decodeScriptEventItem(PyObject* o, ScriptEventArg& out, ScriptEventArg* args, int& used, int depth)
+{
+    out.kind = ScriptEventArg::None;
+    out.i = 0;
+    out.f = 0.0;
+    out.s = 0;
+    out.sLength = 0;
+    out.player = 0;
+    out.object = 0;
+    out.first = 0;
+    out.count = 0;
+    if (!o || o == Py_None)
+        return;
+    if (PyInt_Check(o))                                   // Python bools are ints
+    {
+        out.kind = ScriptEventArg::Int;
+        out.i = static_cast<int>(PyInt_AsLong(o));
+        return;
+    }
+    if (PyFloat_Check(o))
+    {
+        out.kind = ScriptEventArg::Float;
+        out.f = PyFloat_AsDouble(o);
+        return;
+    }
+    if (PyString_Check(o))
+    {
+        char* bytes = 0;
+        int length = 0;                                   // Python 2.3: an int length
+        if (PyString_AsStringAndSize(o, &bytes, &length) == 0 && bytes)
+        {
+            out.kind = ScriptEventArg::String;
+            out.s = bytes;
+            out.sLength = static_cast<int>(length);
+        }
+        else
+            PyErr_Clear();
+        return;
+    }
+    if (PyTuple_Check(o))
+    {
+        if (depth >= kMaxScriptEventDepth)
+            return;
+        int n = static_cast<int>(PyTuple_Size(o));
+        if (n > kMaxScriptEventArgs - used)
+            n = kMaxScriptEventArgs - used;
+        out.kind = ScriptEventArg::Tuple;
+        out.first = used;
+        out.count = n;
+        used += n;
+        for (int k = 0; k < n; ++k)
+            decodeScriptEventItem(PyTuple_GetItem(o, k), args[out.first + k], args, used, depth + 1);
+        return;
+    }
+
+    PyObject* token = PyObject_GetAttrString(o, "token");
+    if (token)
+    {
+        if (token->ob_type == &PyCObject_Type)
+        {
+            ObjectToken* const t = static_cast<ObjectToken*>(PyCObject_AsVoidPtr(token));
+            void* const ctrl = tokenControlBlock(t);
+            out.kind = ScriptEventArg::Object;
+            out.object = ctrl ? static_cast<WeakPtr<world::IObject>::Ctrl*>(ctrl)->target : 0;
+        }
+        Py_DECREF(token);
+        PyErr_Clear();
+        return;
+    }
+    PyErr_Clear();
+
+    PyObject* index = PyObject_GetAttrString(o, "index");
+    if (index)
+    {
+        if (PyInt_Check(index))
+        {
+            out.kind = ScriptEventArg::Player;
+            out.i = static_cast<int>(PyInt_AsLong(index));
+            out.player = world::playerManager ? world::playerManager->getPlayerFromId(out.i) : 0;
+        }
+        Py_DECREF(index);
+    }
+    PyErr_Clear();
+}
+
+void notifyScriptEventListener(int eventId, PyObject* tuple)
+{
+    ScriptEventArg args[kMaxScriptEventArgs];
+    int argc = 0;
+    if (tuple && PyTuple_Check(tuple))
+    {
+        argc = static_cast<int>(PyTuple_Size(tuple));
+        if (argc > kMaxScriptEventArgs)
+            argc = kMaxScriptEventArgs;
+    }
+    int used = argc;
+    for (int k = 0; k < argc; ++k)
+        decodeScriptEventItem(PyTuple_GetItem(tuple, k), args[k], args, used, 0);
+    g_scriptEventListener->onScriptEvent(eventId, args, argc);
+}
+
+} // namespace
+
 // Dispatches a script event when initialized and the dispatch gate is clear.
 // Registration must size the handler table for eventId. Handlers run when marked
 // alwaysCall or when the game is playing in begin-round state 3; Python call errors
@@ -802,6 +923,9 @@ void PythonHost::handleEvent(ScriptEvent eventId, PyObject* args)
         return;
     if (m_data->m_byte01)
         return;
+    // [CHOSEN, not recovered] R4 (see notifyScriptEventListener above).
+    if (g_scriptEventListener)
+        notifyScriptEventListener(static_cast<int>(eventId), args);
     std::vector<std::pair<PyRef, bool> >& handlers = m_data->m_vector28[static_cast<int>(eventId)];
     for (std::vector<std::pair<PyRef, bool> >::iterator it = handlers.begin(); it != handlers.end(); ++it)
     {
@@ -2880,5 +3004,12 @@ std::string PythonHost::getExceptionText() const
 }
 
 } // namespace python
+
+// [CHOSEN, not recovered] R4: the listener slot behind IServerExtension::setScriptEventListener.
+IServerExtension::IScriptEventListener*& serverExtensionHooks::scriptEventListener()
+{
+    return python::g_scriptEventListener;
+}
+
 } // namespace hfe
 } // namespace dice

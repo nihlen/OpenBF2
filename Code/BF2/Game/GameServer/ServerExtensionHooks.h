@@ -1,9 +1,9 @@
 // [CHOSEN, not recovered] Engine-side observer tables behind IServerExtension's observers. No
 // retail image has them. Design record: openbf2-server-ext docs/protocol.md "v2" (items 5, 6 and 8)
-// and docs/admin-channel-draft.md R5 (local design; no upstream issue yet).
+// and docs/admin-channel-draft.md R4 and R5 (local design; no upstream issue yet).
 //
 // Each table is defined beside its only notify site (GameLogicDamage.cpp, FireComp.cpp,
-// SpottedEvent.cpp), so every image that links the site links the table. GameServer's
+// SpottedEvent.cpp, PythonHost.cpp), so every image that links the site links the table. GameServer's
 // IServerExtension adapter forwards a module's add and remove calls here. Main thread only.
 
 #ifndef GAME_GAMESERVER_SERVEREXTENSIONHOOKS_H
@@ -68,6 +68,9 @@ ObserverTable<IServerExtension::IDamageObserver>& damageObservers();
 ObserverTable<IServerExtension::IProjectileObserver>& projectileObservers();
 /// Observers of SpottedEvent::executeServer; defined in SpottedEvent.cpp.
 ObserverTable<IServerExtension::ISpotObserver>& spotObservers();
+/// The single script-event listener (R4, docs/admin-channel-draft.md), or null; defined in
+/// Game/Python/PythonHost.cpp beside PythonHost::handleEvent.
+IServerExtension::IScriptEventListener*& scriptEventListener();
 
 } // namespace serverExtensionHooks
 } // namespace hfe
