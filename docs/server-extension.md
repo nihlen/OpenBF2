@@ -6,7 +6,7 @@ external tools a typed interface to the running game: a bot channel for a bot si
 BF2WebAdmin. No retail image has any of this. Every part is `[CHOSEN, not recovered]` and carries that marker in
 the source.
 
-These changes are local only. They live in local commits on `main` that have never been pushed: `9e1cda6`, `540fa88`,
+These changes are local only. They live in local commits on branch `serverext/r1`, not merged into `main` and never pushed: `9e1cda6`, `540fa88`,
 `74e18d9` and `873d1b1`, each marked "local, not for upstream". There is no upstream issue for them. The design
 record is in the module's contracts, `docs/protocol.md` (R1, R1b, v1, v2) and `docs/admin-channel-draft.md` (R4, R5).
 How the engine, the module, the sidecar and WebAdmin fit together, and how to build and test them, is in that repo's
