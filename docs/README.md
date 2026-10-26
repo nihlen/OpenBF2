@@ -13,6 +13,7 @@ contribution workflow and validation requirements.
 | Engine images, source layout and lifecycle | [Engine architecture](architecture.md) |
 | Recovery prerequisites, contribution rules and validation | [Development guide](development.md) |
 | Editor console commands and script undo | [Editor console guide](editor-console.md) |
+| The local `IServerExtension` interface for the openbf2-server-ext module | [Server extension](server-extension.md) |
 
 [AGENTS.md](../AGENTS.md) is the working policy. Third-party documentation stays with its
 dependency under `Code/BF2/External/`. The validation commands are in the development guide,

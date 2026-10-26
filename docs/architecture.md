@@ -199,6 +199,10 @@ This loader does not itself reroute sockets. bf2hub's GameSpy/master-server redi
 install-time patch of the host's import table that a runtime load does not reproduce; point the
 engine at the correct master-server address in source instead.
 
+A local branch also publishes a native interface for one such module, the openbf2-server-ext
+module. It is `IServerExtension`, with observer hooks in the damage, fire, spotting and script-event
+paths. It is local only and `[CHOSEN, not recovered]`; see [Server extension](server-extension.md).
+
 ## The editor
 
 The editor targets this engine's 1.50 content contract. Its application, UI, command history,
