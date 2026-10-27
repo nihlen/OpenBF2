@@ -314,7 +314,8 @@ public:
     /// many 1/30 s ticks each dedicated-server frame runs, instead of the wall clock.
     struct ITickSource
     {
-        /// Called once per frame on the main thread; must not block.
+        /// Called once per frame on the main thread. It may wait a few milliseconds for ticks to become
+        /// due (in place of the frame sleep that follows a frame without ticks), never longer.
         /// @return The ticks to run this frame, 0 to maxTicks.
         virtual int takeTicks(int maxTicks) = 0;
 
