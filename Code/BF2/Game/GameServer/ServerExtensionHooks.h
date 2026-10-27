@@ -71,6 +71,9 @@ ObserverTable<IServerExtension::ISpotObserver>& spotObservers();
 /// The single script-event listener (R4, docs/admin-channel-draft.md), or null; defined in
 /// Game/Python/PythonHost.cpp beside PythonHost::handleEvent.
 IServerExtension::IScriptEventListener*& scriptEventListener();
+/// The frame loop's tick source (R3, stepped time), or null for the wall clock; defined in
+/// Game/Main/BF2Engine.cpp beside BF2Engine::mainLoop, its only reader.
+IServerExtension::ITickSource*& tickSource();
 
 } // namespace serverExtensionHooks
 } // namespace hfe

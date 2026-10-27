@@ -55,6 +55,7 @@
 #include "../../Scene/Object/PlayerManager.h" // the real PlayerManager - replaces the local shim
 #include "../Objects/IPlayer.h"              // per-player handleFrameUpdate loop
 #include "../Objects/ICameraObject.h"       // mainLoop's held camera: getCamera / setInterpolatedMode
+#include "../GameServer/ServerExtensionHooks.h"   // [CHOSEN, not recovered] R3: the stepped-time tick source
 
 #include <list>
 #include <string>
@@ -1539,6 +1540,25 @@ bool BF2Engine::shutdownEngine()
     return true;
 }
 
+// [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md R3 (stepped time). The module's tick
+// source, installed once through IServerExtension::setTickSource on a dedicated server; null runs
+// the retail wall-clock loop.
+IServerExtension::ITickSource*& serverExtensionHooks::tickSource()
+{
+    static IServerExtension::ITickSource* source = 0;
+    return source;
+}
+
+// [CHOSEN, not recovered] R3. Advances the exact clock by whole 1/30 s ticks in microseconds,
+// carrying the third of a microsecond each tick leaves so the clock never drifts from the tick count.
+static void advanceExactTimeByTicks(int ticks)
+{
+    static unsigned int s_thirds = 0;
+    const unsigned int total = static_cast<unsigned int>(ticks) * 100000u + s_thirds;
+    s_thirds = total % 3u;
+    g_system->advanceExactTime(total / 3u);
+}
+
 // Previous frame time is translation-unit state, not a BF2Engine member.
 static double s_prevWallClockTime = 0.0;                        // [INFERRED] name
 
@@ -1619,7 +1639,23 @@ bool BF2Engine::mainLoop()
     // THE exact (simulation) clock and the frames ring, 0x8137433-0x81374AD.
     float exactBefore = (float)g_system->getExactTime();            //  vcall +0x18, m32 store
 
-    if (!demo->overrideAdvanceTime())
+    // [CHOSEN, not recovered] R3 (stepped time): on a dedicated server with a tick source, the
+    // source decides this frame's ticks and the exact clock advances by exactly those, not by the
+    // wall clock. The retail path below runs whenever no source is installed.
+    IServerExtension::ITickSource* const tickSource =
+        isDedicated() ? serverExtensionHooks::tickSource() : 0;
+    int steppedTicks = 0;
+    if (tickSource)
+    {
+        steppedTicks = tickSource->takeTicks(10);                   // the retail per-frame cap
+        if (steppedTicks < 0)
+            steppedTicks = 0;
+        else if (steppedTicks > 10)
+            steppedTicks = 10;
+        if (steppedTicks > 0)
+            advanceExactTimeByTicks(steppedTicks);
+    }
+    else if (!demo->overrideAdvanceTime())
         g_system->advanceExactTime();                              //  (only when not overridden)
 
     float exactNow = (float)g_system->getExactTime();               //  vcall +0x18, m32 store
@@ -1644,7 +1680,9 @@ bool BF2Engine::mainLoop()
     const bool simRateZero = (g_system->getSimulationRate() == 0);  //  vcall +0x24
 
     // THE fixed-timestep decision (0x81374DD). The argument is the engine's simulation clock.
-    int   ticks       = tickCalculator->compute(g_system->getExactTime());
+    // [CHOSEN, not recovered] R3: a stepped frame runs the source's ticks; the calculator is not
+    // consulted, so its clock stays where the source was installed.
+    int   ticks       = tickSource ? steppedTicks : tickCalculator->compute(g_system->getExactTime());
     int   renderTicks = ticks;                                      // var_170 - input/render count
     float renderDt    = tickCalculator->tickLength;                 // var_16C = calculator's +0x00
     // note: this->dword6C(+0x6C) receives tickLength's RAW bits each frame (0x81374F9, a plain mov -
@@ -1901,7 +1939,14 @@ bool BF2Engine::mainLoop()
 
     // Limit dedicated frames to 30 Hz using time since frame entry. Each sleep-loop
     // iteration subtracts overhead again; a backward clock ends the wait.
-    if (isDedicated())                                              // BF2.exe 0x40CA80: the frame limiter is server-only
+    if (isDedicated() && tickSource)
+    {
+        // [CHOSEN, not recovered] R3: no 30 Hz limiter. A frame without ticks waits briefly for the
+        // source's next grant instead of spinning.
+        if (steppedTicks == 0)
+            g_system->sleep(1);
+    }
+    else if (isDedicated())                                         // BF2.exe 0x40CA80: the frame limiter is server-only
     {
     double remaining = (1.0 / 30.0)                                 // dbl_8892F10
                      - (g_system->getWallClockTime() - frameStartWallClock)

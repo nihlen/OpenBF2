@@ -310,6 +310,24 @@ public:
     /// @return False when the player does not exist, is dead, or no server game logic exists.
     virtual bool killPlayer(int playerId) = 0;
 
+    /// [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md R3 (stepped time). Decides how
+    /// many 1/30 s ticks each dedicated-server frame runs, instead of the wall clock.
+    struct ITickSource
+    {
+        /// Called once per frame on the main thread; must not block.
+        /// @return The ticks to run this frame, 0 to maxTicks.
+        virtual int takeTicks(int maxTicks) = 0;
+
+    protected:
+        ~ITickSource() {}
+    };
+
+    /// Installs the frame loop's tick source (R3). Set it once at load and keep it for the life of
+    /// the server: the stepped clock moves System's wall reference, so the wall clock can't take
+    /// over again. Main thread only.
+    /// @return False on a client (non-dedicated) image, for null, or when a source is installed.
+    virtual bool setTickSource(ITickSource* source) = 0;
+
 protected:
     ~IServerExtension() {}
 };

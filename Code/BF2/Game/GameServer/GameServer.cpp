@@ -265,6 +265,14 @@ public:
     virtual bool sendMedalEvent(int playerId, int medal, int value);
     virtual bool setRank(int playerId, int rank, bool sendEvent);
     virtual bool killPlayer(int playerId);
+    virtual bool setTickSource(ITickSource* source)                                // protocol.md R3
+    {
+        ITickSource*& slot = serverExtensionHooks::tickSource();
+        if (!isDedicated() || !source || slot)
+            return false;
+        slot = source;
+        return true;
+    }
 
 private:
     GameServer* m_server;

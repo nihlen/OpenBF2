@@ -7,7 +7,7 @@ BF2WebAdmin. No retail image has any of this. Every part is `[CHOSEN, not recove
 the source.
 
 These changes are local only. They live in local commits on branch `serverext/r1`, not merged into `main` and never pushed: `9e1cda6`, `540fa88`,
-`74e18d9` and `873d1b1`, each marked "local, not for upstream". There is no upstream issue for them. The design
+`74e18d9`, `873d1b1` and the R3 commit after them, each marked "local, not for upstream". There is no upstream issue for them. The design
 record is in the module's contracts, `docs/protocol.md` (R1, R1b, v1, v2) and `docs/admin-channel-draft.md` (R4, R5).
 How the engine, the module, the sidecar and WebAdmin fit together, and how to build and test them, is in that repo's
 `docs/system.md`.
@@ -37,6 +37,7 @@ this header and calls through its vtable. Every method must be called on the mai
 |---|---|---|
 | Bots (R1, v1) | `createInputPlayer`, `findSpawnGroup`, `listSpawnGroups` (`SpawnGroupInfo`), `restartRound`, `getGameStatus` | Creating a connection-less, AI-flagged player whose input the module writes, without the AI library. Finding the team's spawn groups for the spawn fallback. Round restarts. |
 | Observers (v2, R5) | `addDamageObserver`/`removeDamageObserver` (`DamageInfo`), `addProjectileObserver`/`remove…`, `getProjectileInfo` (`ProjectileInfo`), `addSpotObserver`/`remove…` (`SpotInfo`), `getBeginRoundState`, `getTimeToNextStateChange` | Read-only notification of damage, projectile launches and spotted messages, plus the round's begin state. They feed the bot channel's `Damage`, `Kill`, `ProjectileList` and `RoundState`, and the admin channel's events. |
+| Stepped time (R3) | `setTickSource` (`ITickSource`) | Bot tests faster than real time: the module decides each dedicated-server frame's ticks (`serverext.cfg stepMode 1`, protocol v4 `Step`). Set once at load; the retail wall-clock loop runs when none is installed. |
 | Admin channel (R4 and getters) | `setScriptEventListener` (`ScriptEventArg`), `getServerInfo`, `getRoundInfo`, `getTeamName`, `getCdKeyHash`, `getDisconnectReason`, `getMapList`, `runMapListEntry`, `sendGameLogicEvent`, `sendHudEvent`, `sendMedalEvent`, `setRank`, `killPlayer` | Every script event (the Python game events), decoded for the module, and the server state and commands BF2WebAdmin used to reach through `mm_webadmin.py`. |
 
 Observers cannot change or veto anything. They must return quickly and must not call back into damage, kill,
@@ -55,6 +56,7 @@ image that links the site also links the table. The adapter forwards `add…`/`r
 | Spot observers | `SpottedEvent::executeServer` (`Game/GameEvents/SpottedEvent.cpp`) |
 | Script-event listener (R4) | `PythonHost::handleEvent` (`Game/Python/PythonHost.cpp`, `notifyScriptEventListener`). It runs before the begin-round gate and before Python's handlers, whether or not a handler is registered. |
 | Round info | inline, non-virtual accessors in `Game/GameLogic/ServerGameLogic.h` (`getServerExtRoundStartTick`, `getServerExtRoundsPlayed`); the class layout is unchanged |
+| Tick source (R3) | `BF2Engine::mainLoop` (`Game/Main/BF2Engine.cpp`): with a source, the frame runs its ticks, advances the exact clock by exactly those (`System::advanceExactTime(unsigned)`, the demo recorder's fixed step) and skips the 30 Hz limiter; a frame without ticks sleeps 1 ms. The source pointer is defined there (`serverExtensionHooks::tickSource`). |
 | Ungated player creation | `GameServer::createPlayerUngated` (`GameServer.cpp`): the retail `createPlayer` body after its AI-library gate, split out unchanged. `createPlayer` behaves as before. |
 
 There are three R1b guards. Retail has no null check on the AI-player courier, and without the AI library that
