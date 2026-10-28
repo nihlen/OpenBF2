@@ -11,6 +11,7 @@
 #include "../GameLogic/ScoreSystem/ScoreManager.h"      // [CHOSEN, not recovered] admin channel: getRoundInfo
 #include "../MapList.h"                                 // [CHOSEN, not recovered] admin channel: getMapList
 #include "../../Scene/Object/PlayerScoreData.h"         // [CHOSEN, not recovered] admin channel: setRank
+#include "../../Physics/LatencyCompensation.h"          // [CHOSEN, not recovered] getLagCompensation, tv-hitbox
 #include "VoipServerConnection.h"
 #include "ClientInfo.h"                    // handleDataBlock parses a block-id-1 payload into one
 #include "../Persistence/AntiHacks.h"      // handleClientInfo's ranked name-hash record
@@ -280,6 +281,11 @@ public:
     virtual void removeProjectileCollisionObserver(IProjectileCollisionObserver* observer)
     {
         serverExtensionHooks::projectileCollisionObservers().remove(observer);
+    }
+    virtual float getLagCompensation(int playerId)                               // tv-hitbox.md
+    {
+        world::IPlayer* const player = world::playerManager->getPlayerFromId(playerId);
+        return player ? world::LatencyCompensation::getLatency(player) : -1.0f;
     }
 
 private:

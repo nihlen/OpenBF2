@@ -372,6 +372,14 @@ public:
     virtual bool addProjectileCollisionObserver(IProjectileCollisionObserver* observer) = 0;
     virtual void removeProjectileCollisionObserver(IProjectileCollisionObserver* observer) = 0;
 
+    /// How far back, in seconds, the server tests this player's projectiles against other vehicles and
+    /// soldiers now: LatencyCompensation::getLatency (ping x pingFactor plus the interpolation time the
+    /// client reports, capped by phy-latencyComp-max, or the forced phy-latencyComp-debug; 0 with lag
+    /// compensation off; a local player such as a bot gets its local input latency, normally 0).
+    /// 1/30 s or less rewinds nothing. Main thread only.
+    /// @return The latency, or -1 when the player does not exist.
+    virtual float getLagCompensation(int playerId) = 0;
+
 protected:
     ~IServerExtension() {}
 };
