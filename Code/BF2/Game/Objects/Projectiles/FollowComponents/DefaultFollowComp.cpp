@@ -18,6 +18,8 @@
 #include "../../../../Core/System.h"
 #include "../../../../IO/Stream/IStream.h"
 #include "../../../../Physics/IPhysicsNode.h"
+#include "../../CompTemplateBases.h"
+#include "../../IWeaponObject.h"
 
 namespace dice {
 namespace hfe {
@@ -30,6 +32,20 @@ float* const g_predictionFactor =
 // This cvar is registered by the shipped TU but has no reader in either followTarget body.
 float* const g_targetYOffset = Vars::getFloat("targetYOffset", 0.0f);
 float* const g_maxDistKillMissile = Vars::getFloat("maxDistKillMissile", 15.0f);
+
+// [CHOSEN, not recovered] Local serverext/r1 change, not for upstream (no issue). 0 keeps retail.
+// Non-zero: a TV missile whose launcher watches its camera keeps turning towards an aim point
+// beside or behind it instead of flying straight. See followTarget.
+int* const g_tvTurnBehind = Vars::getInt("tv-turn-behind", 0);
+
+// Returns whether the projectile was fired by a TV-guided launcher.
+bool isTvGuided(IObject* projectile)
+{
+    IObject* const launcher = static_cast<GenericProjectile*>(projectile)->getLauncherWeapon();
+    IWeaponObject* const weapon = launcher
+        ? static_cast<IWeaponObject*>(launcher->queryInterface(IID_IWeaponObject)) : 0;
+    return weapon && weapon->getTargetSystemType() == TSTVGuided;
+}
 
 float length(const Vec3& value)
 {
@@ -353,12 +369,24 @@ bool DefaultFollowComp::followTarget(IObject* target)
         localDirection.z *= inverseDistance;
     }
 
-    const float yawAngle =
+    float yawAngle =
         std::asin(clampUnit(localDirection.x)) * 57.2957763671875f;
     const float pitchAngle =
         std::fabs(std::asin(clampUnit(localDirection.y)) * 57.2957763671875f);
 
-    if (localDirection.z <= 0.0f)
+    // [CHOSEN, not recovered] tv-turn-behind. Retail stops turning when the aim point is not in
+    // front (local z <= 0), so a TV gunner who looks more than 90 degrees away flies straight.
+    // This keeps turning towards it at the same caps, only for a TV missile whose launcher watches
+    // its camera, so a missile nobody steers keeps flying straight past its last aim point. asin
+    // stops at 90 degrees: the aim point's full horizontal angle is taken instead (right if
+    // straight behind); its elevation stays as retail measures it.
+    const bool turnBehind = *g_tvTurnBehind != 0 && localDirection.z <= 0.0f
+        && isTvGuided(m_initObject)
+        && static_cast<GenericProjectile*>(m_initObject)->isInProjectileCamera();
+    if (turnBehind)
+        yawAngle = std::atan2(localDirection.x, localDirection.z) * 57.2957763671875f;
+
+    if (localDirection.z <= 0.0f && !turnBehind)
     {
         m_yawTurn = 0.0f;
         m_pitchTurn = 0.0f;
