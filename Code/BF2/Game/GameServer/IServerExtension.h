@@ -329,6 +329,49 @@ public:
     /// @return False on a client (non-dedicated) image, for null, or when a source is installed.
     virtual bool setTickSource(ITickSource* source) = 0;
 
+    // ---- projectile collisions (openbf2-server-ext docs/findings/tv-hitbox.md) ----
+
+    /// One collision the server reports to a projectile (GenericProjectile::handleCollision), before
+    /// its collision component decides between impact, ricochet, penetration and detonation. Tells
+    /// which part was touched: damage is booked to the nearest armour up the parent chain, so a hit
+    /// on a child part (a rotor, a dummy missile) reads as a hit on the vehicle in DamageInfo.
+    /// Pointers are valid only for the duration of the observer call.
+    struct ProjectileCollisionInfo
+    {
+        world::IObject* projectile;    // the projectile
+        world::IPlayer* shooter;       // the projectile's player, or null
+        world::IObject* other;         // the object part it touched: a vehicle's root (its hull), one of
+                                       // its child parts, a soldier or a static object; null for terrain
+        float position[3];             // the impact point the projectile records (its position plus the
+                                       // collision's push-out vector)
+        float normal[3];               // the contact normal
+        float speed[3];                // the relative speed the collision passed
+        int material;                  // the collision material index
+        float latency;                 // seconds of lag compensation the engine uses for this shooter now
+                                       // (LatencyCompensation::getLatency); 1/30 s or less rewinds nothing
+        bool otherRewound;             // other was tested at its pose latency seconds ago: compensation is
+                                       // on, latency is above 1/30 s and other keeps a latency history
+                                       // (parentless vehicles and soldiers). Child parts are tested where
+                                       // they are now
+    };
+
+    /// Receives every ProjectileCollisionInfo on the main thread, server only. It must not call back
+    /// into collision, damage or object-lifetime code, and must return quickly: it runs inside the
+    /// collision response.
+    class IProjectileCollisionObserver
+    {
+    public:
+        virtual void onProjectileCollision(const ProjectileCollisionInfo& info) = 0;
+
+    protected:
+        ~IProjectileCollisionObserver() {}
+    };
+
+    /// Registers a projectile-collision observer. Read-only. Main thread only.
+    /// @return False when observer is null, already registered, or the table is full.
+    virtual bool addProjectileCollisionObserver(IProjectileCollisionObserver* observer) = 0;
+    virtual void removeProjectileCollisionObserver(IProjectileCollisionObserver* observer) = 0;
+
 protected:
     ~IServerExtension() {}
 };

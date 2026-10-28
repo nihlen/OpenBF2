@@ -46,6 +46,8 @@
 #include "../../../Scene/Object/ObjectTypes/Base/ObjectTemplateManager.h"
 #include "../../../Scene/Object/ObjectTypes/Game/IPlayerControlObject.h"
 #include "../Fx/FxTrace.h"                  // [TEMP] BF2_TRACE_FX - detonate's three trace lines
+#include "../../GameServer/ServerExtensionHooks.h"   // [CHOSEN, not recovered] openbf2-server-ext tv-hitbox
+#include "../../../Physics/LatencyCompensation.h"    // the collision observer's latency fields
 
 namespace dice {
 namespace hfe {
@@ -874,6 +876,37 @@ void GenericProjectile::handleMessage(TemplateMessage message, IPlayer* player, 
     }
 }
 
+namespace {
+
+// [CHOSEN, not recovered] openbf2-server-ext docs/findings/tv-hitbox.md: reports the collision to the
+// module's projectile-collision observers. Read-only. otherRewound restates the test the collision
+// paths make (PointResponsePhysics::checkObjectVsObject, SoldierResponsePhysics::checkSoldierVsPoint):
+// only an object whose own physics node keeps a latency history is tested at its rewound pose.
+void notifyProjectileCollisionObservers(IObject* projectile, IPlayer* shooter, IObject* other,
+                                        const Vec3& impact, const Vec3& normal, const Vec3& speed,
+                                        int material)
+{
+    IServerExtension::ProjectileCollisionInfo info;
+    info.projectile = projectile;
+    info.shooter = shooter;
+    info.other = other;
+    info.position[0] = impact.x; info.position[1] = impact.y; info.position[2] = impact.z;
+    info.normal[0] = normal.x;   info.normal[1] = normal.y;   info.normal[2] = normal.z;
+    info.speed[0] = speed.x;     info.speed[1] = speed.y;     info.speed[2] = speed.z;
+    info.material = material;
+    info.latency = LatencyCompensation::m_isEnabled ? LatencyCompensation::getLatency(shooter) : 0.0f;
+    IPhysicsNode* const otherNode =
+        other ? static_cast<IPhysicsNode*>(object_detail::LayoutAccess::physicsNode(other)) : 0;
+    info.otherRewound = LatencyCompensation::m_isEnabled && info.latency > 0.033333335f && otherNode
+                        && otherNode->hasLatencyCompensation();
+    serverExtensionHooks::ObserverTable<IServerExtension::IProjectileCollisionObserver>& table =
+        serverExtensionHooks::projectileCollisionObservers();
+    for (int i = 0; i < table.size(); ++i)
+        table.at(i)->onProjectileCollision(info);
+}
+
+} // namespace
+
 // . This covers the complete componentless server arm and the typed
 // collision-component dispatch. The seek-only target-position calculation feeds a dead local in
 // the shipped function; its currently untyped manager callback is isolated to that non-null arm.
@@ -929,6 +962,12 @@ bool GenericProjectile::handleCollision(IObject* other,
     m_vec1D8.y = absolutePosition.y + vecC.y;
     m_vec1D8.z = absolutePosition.z + vecC.z;
     assignObjectWeakBlock(m_targetObjectWeak, other);
+
+    // [CHOSEN, not recovered] openbf2-server-ext tv-hitbox: which part the server's collision touched,
+    // and whether it was tested rewound. Past the two early returns, so a projectile reports a contact
+    // only while it can still act on it; vecA is the relative speed, vecB the normal.
+    if (gameLogic->isServer() && !serverExtensionHooks::projectileCollisionObservers().empty())
+        notifyProjectileCollisionObservers(this, getPlayer(), other, m_vec1D8, vecB, vecA, materialId);
 
     if (grenade_trace::selected(this))
     {
@@ -2303,5 +2342,21 @@ bool GenericProjectile::isCreatedByLocalPlayer() const
 }
 
 } // namespace world
+} // namespace hfe
+} // namespace dice
+
+namespace dice {
+namespace hfe {
+namespace serverExtensionHooks {
+
+// [CHOSEN, not recovered] openbf2-server-ext docs/findings/tv-hitbox.md. The table lives beside its only
+// notify site, GenericProjectile::handleCollision.
+ObserverTable<IServerExtension::IProjectileCollisionObserver>& projectileCollisionObservers()
+{
+    static ObserverTable<IServerExtension::IProjectileCollisionObserver> table;
+    return table;
+}
+
+} // namespace serverExtensionHooks
 } // namespace hfe
 } // namespace dice

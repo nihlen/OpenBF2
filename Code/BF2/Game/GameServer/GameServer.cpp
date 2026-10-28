@@ -273,6 +273,14 @@ public:
         slot = source;
         return true;
     }
+    virtual bool addProjectileCollisionObserver(IProjectileCollisionObserver* observer)  // tv-hitbox.md
+    {
+        return serverExtensionHooks::projectileCollisionObservers().add(observer);
+    }
+    virtual void removeProjectileCollisionObserver(IProjectileCollisionObserver* observer)
+    {
+        serverExtensionHooks::projectileCollisionObservers().remove(observer);
+    }
 
 private:
     GameServer* m_server;

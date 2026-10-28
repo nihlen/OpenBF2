@@ -3,7 +3,7 @@
 // and docs/admin-channel-draft.md R4 and R5 (local design; no upstream issue yet).
 //
 // Each table is defined beside its only notify site (GameLogicDamage.cpp, FireComp.cpp,
-// SpottedEvent.cpp, PythonHost.cpp), so every image that links the site links the table. GameServer's
+// GenericProjectile.cpp, SpottedEvent.cpp, PythonHost.cpp), so every image that links the site links the table. GameServer's
 // IServerExtension adapter forwards a module's add and remove calls here. Main thread only.
 
 #ifndef GAME_GAMESERVER_SERVEREXTENSIONHOOKS_H
@@ -66,6 +66,8 @@ private:
 ObserverTable<IServerExtension::IDamageObserver>& damageObservers();
 /// Observers of FireComp's projectile launch; defined in FireComp.cpp.
 ObserverTable<IServerExtension::IProjectileObserver>& projectileObservers();
+/// Observers of GenericProjectile::handleCollision on the server; defined in GenericProjectile.cpp.
+ObserverTable<IServerExtension::IProjectileCollisionObserver>& projectileCollisionObservers();
 /// Observers of SpottedEvent::executeServer; defined in SpottedEvent.cpp.
 ObserverTable<IServerExtension::ISpotObserver>& spotObservers();
 /// The single script-event listener (R4, docs/admin-channel-draft.md), or null; defined in
