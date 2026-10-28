@@ -21,6 +21,7 @@
 #include "../../../GameEvents/TargetDirectionEvent.h"
 #include "../../../IGame.h"
 #include "../../../IGameLogic.h"
+#include "../../../Utility/Vars.h"
 #include "../../../../Core/Debug.h"
 #include "../../../../Core/Ids.h"
 #include "../../../../Core/System.h"
@@ -38,6 +39,14 @@ namespace world {
 extern IBase* heightmapCluster;
 
 namespace {
+
+// [CHOSEN, not recovered] Local serverext/r1 change, not for upstream (no issue). 0 keeps retail.
+// Above 0: the largest distance in metres between the client's eye and the server's missile at
+// which a TV aim point that is not ahead of the missile is cast again from the missile; see
+// updateTargetObject.
+float* const g_tvAimFromMissile = Vars::getFloat("tv-aim-from-missile", 0.0f);
+// Set while updateTargetObject casts again from the missile, so it does not recurse further.
+bool g_tvRecasting = false;
 
 IPlayerControlObject* findPco(IObject* object)
 {
@@ -495,6 +504,36 @@ void LPTargetComp::updateTargetObject(Vec3 start, Vec3 end)
 
     if (getTargetObject())
         getTargetObject()->setAbsolutePosition(chosen);
+
+    // [CHOSEN, not recovered] tv-aim-from-missile. The client's eye is its projectile camera, which
+    // trails the server's missile by the client's lag. A near hit of the client's ray (a wall
+    // beside the missile) can then lie beside or behind the server's missile, and DefaultFollowComp
+    // stops turning. Only in that case is the ray cast again, in the client's direction from the
+    // server's missile; an aim point ahead of the missile keeps the retail placement. An eye
+    // farther from the missile than the configured distance (a bot aiming at a point from its
+    // vehicle) is not taken to be the missile's camera and keeps the retail placement.
+    if (*g_tvAimFromMissile > 0.0f && !g_tvRecasting && getTargetSystem() == TSTVGuided && projectile
+        && (hitObject || hitTerrain || m_targetTemplate->getSetTargetAtMaxDistance())
+        && projectile->isInProjectileCamera())
+    {
+        const Vec3 missile = projectile->getAbsolutePosition();
+        if (length(subtract(missile, start)) <= *g_tvAimFromMissile)
+        {
+            const Mat4& transform = projectile->getAbsoluteTransformation();
+            const Vec3 toAim = subtract(chosen, missile);
+            const float ahead = toAim.x * transform.m[8] + toAim.y * transform.m[9]
+                + toAim.z * transform.m[10];
+            // The follow component steers after the missile has moved on: require two ticks of
+            // travel in front of it.
+            const float margin = 2.0f * length(*projectile->getVelocity()) / 30.0f;
+            if (ahead <= margin)
+            {
+                g_tvRecasting = true;
+                updateTargetObject(missile, addScaled(missile, direction, 100.0f));
+                g_tvRecasting = false;
+            }
+        }
+    }
 }
 
 LPTargetCompTemplate::LPTargetCompTemplate()

@@ -70,6 +70,15 @@ courier is null. A null check is therefore added where an AI-flagged player can 
 
 None of the three has run at runtime yet.
 
+## Local gameplay settings
+
+These are local `serverext/r1` changes outside `IServerExtension`, `[CHOSEN, not recovered]`. Each is an engine
+variable whose default keeps retail behaviour; set it with `vars.set <name> <value>` (console, rcon or a `.con` file).
+
+| Variable | Site | Effect |
+|---|---|---|
+| `tv-aim-from-missile` (float, default 0) | `LPTargetComp::updateTargetObject` (`Game/Objects/Weapons/TargetComponents/LPTargetComp.cpp`) | The client's camera trails the server's missile by its lag, so the retail aim point (the first hit of the client's ray) can lie beside or behind the server's missile near a wall, and `DefaultFollowComp` stops turning. Above 0, the retail placement runs first; only when its aim point is less than two ticks of travel ahead of the missile is the ray cast again, in the client's direction from the server's missile. This applies only while the launcher watches the missile's camera and the client's eye lies within that many metres of the missile; a direction from farther away (a bot aiming from its vehicle) keeps the retail placement. In that case the target is placed twice in one update, so a lock warning can change twice. Tested with bots on a WSL server (openbf2-server-ext `docs/system.md`; 50 m); a human client is untested. |
+
 ## Changing it
 
 - Find every site with `rg "openbf2-server-ext"` in `Code/BF2`.
