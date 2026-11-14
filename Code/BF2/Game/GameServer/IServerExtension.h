@@ -1,6 +1,6 @@
 // [CHOSEN, not recovered] OpenBF2 server-extension surface for native modules. No retail image has
-// it. Design record: openbf2-server-ext docs/protocol.md R1, and docs/admin-channel-draft.md R4 and
-// R5 (local design; no upstream issue yet).
+// it. Design record: openbf2-server-ext docs/protocol.md R1, and docs/admin-channel-draft.md R4, R5
+// and R7 (local design; no upstream issue yet).
 //
 // GameServer publishes one instance as the named singleton "OpenBF2ServerExtension" (flag 4,
 // borrowed; ClassManager does not own or release it) before the mod's openbf2.con runs. A module
@@ -379,6 +379,35 @@ public:
     /// 1/30 s or less rewinds nothing. Main thread only.
     /// @return The latency, or -1 when the player does not exist.
     virtual float getLagCompensation(int playerId) = 0;
+
+    // ---- R7 client presentation hooks (openbf2-server-ext docs/admin-channel-draft.md "R7") ----
+
+    /// Sends a HUD event (PostRemoteEvent on ECHud) with up to 52 payload bytes to one player, or to
+    /// every playing client for -1. Only ids whose retail client handlers read the payload as plain
+    /// data are accepted: 40, 41, 42, 43, 44, 51, 64, 65, 66, 70, 71, 74 and 83. The payload is
+    /// zero-padded and always sent as 52 bytes, so handlers reading past size see zeros.
+    /// Main thread only.
+    /// @return False for another id, a size above 52, a null payload with a nonzero size, or a player
+    ///         that does not exist.
+    virtual bool sendHudEventRaw(int playerId, int eventId, const void* payload, int size) = 0;
+
+    /// Moves the client's round clock and begin-round banner: sends a BeginRoundEvent with the
+    /// server's current begin-round state and a next-state-change tick secondsFromNow ahead, to one
+    /// player or to every connected client for -1. The server's own state and clock do not change;
+    /// its next BeginRoundEvent (a phase change, a join) puts the client's clock back. Main thread only.
+    /// @return False without game logic, for a negative or non-finite time, or a player that does
+    ///         not exist.
+    virtual bool sendRoundClock(int playerId, float secondsFromNow) = 0;
+
+    /// Issues a squad order through the retail SquadManager (issueSquadOrder, or issueCommanderOrder
+    /// when commander is set), so the server's squad state, the IssueSquadOrderEvent broadcast and the
+    /// members' HUD notices all follow the retail path. orderId: 0 artillery, 1 UAV, 2 vehicle drop,
+    /// 3 supply, 5 attack, 6 defend, 7 repair, 8 destroy, 9 mines, 10 attack control point, anything
+    /// else move. points are three positions (x, y, z each). Main thread only.
+    /// @return False for squad 0, a team other than 1 or 2, a squad that does not exist, or a null
+    ///         points array.
+    virtual bool issueSquadOrder(int team, int squad, int orderId, unsigned short targetNetId,
+                                 const float* points, bool commander) = 0;
 
 protected:
     ~IServerExtension() {}

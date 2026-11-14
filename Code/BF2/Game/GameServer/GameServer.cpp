@@ -12,6 +12,8 @@
 #include "../MapList.h"                                 // [CHOSEN, not recovered] admin channel: getMapList
 #include "../../Scene/Object/PlayerScoreData.h"         // [CHOSEN, not recovered] admin channel: setRank
 #include "../../Physics/LatencyCompensation.h"          // [CHOSEN, not recovered] getLagCompensation, tv-hitbox
+#include "../GameEvents/BeginRoundEvent.h"              // [CHOSEN, not recovered] R7 sendRoundClock
+#include "../GameLogic/SquadManager/SquadOrder.h"       // [CHOSEN, not recovered] R7 issueSquadOrder
 #include "VoipServerConnection.h"
 #include "ClientInfo.h"                    // handleDataBlock parses a block-id-1 payload into one
 #include "../Persistence/AntiHacks.h"      // handleClientInfo's ranked name-hash record
@@ -287,6 +289,10 @@ public:
         world::IPlayer* const player = world::playerManager->getPlayerFromId(playerId);
         return player ? world::LatencyCompensation::getLatency(player) : -1.0f;
     }
+    virtual bool sendHudEventRaw(int playerId, int eventId, const void* payload, int size);   // R7
+    virtual bool sendRoundClock(int playerId, float secondsFromNow);                           // R7
+    virtual bool issueSquadOrder(int team, int squad, int orderId, unsigned short targetNetId,
+                                 const float* points, bool commander);                         // R7
 
 private:
     GameServer* m_server;
@@ -637,6 +643,82 @@ bool GameServer::ServerExtension::sendHudEvent(int playerId, int eventId, int da
     int payload = data;
     game->sendGameEventIfConnected(static_cast<unsigned int>(playerId),
         new PostRemoteEvent(ECHud, static_cast<unsigned int>(eventId), playerId, &payload, 4, 0.0f));
+    return true;
+}
+
+// [CHOSEN, not recovered] R7 (openbf2-server-ext docs/admin-channel-draft.md). The whitelist holds the
+// HUD ids whose client handlers (Menu/BF2HudManagerHudEvents.cpp, Bf2MenuMapNode.cpp,
+// HudVehicleInformation.cpp, HudInformationLayer.cpp) read the payload as plain data. Ids such as 7,
+// 12, 17, 38 and 73 treat it as a pointer (73 frees it) and must never be sent from here.
+bool GameServer::ServerExtension::sendHudEventRaw(int playerId, int eventId, const void* payload, int size)
+{
+    static const int kAllowed[] = { 40, 41, 42, 43, 44, 51, 64, 65, 66, 70, 71, 74, 83 };
+    const int kMaxPayload = 0x34;   // PostRemoteEvent::m_payload
+    if (!m_server || size < 0 || size > kMaxPayload || (size > 0 && !payload))
+        return false;
+    bool allowed = false;
+    for (size_t i = 0; i < sizeof(kAllowed) / sizeof(kAllowed[0]); ++i)
+        if (kAllowed[i] == eventId)
+            allowed = true;
+    if (!allowed)
+        return false;
+    if (playerId != -1 && !world::playerManager->getPlayerFromId(playerId))
+        return false;
+    unsigned char buffer[0x34];
+    std::memset(buffer, 0, sizeof(buffer));
+    if (size > 0)
+        std::memcpy(buffer, payload, static_cast<size_t>(size));
+    // isLocal false: a dedicated server has no local human to run it for.
+    PostRemoteEvent* event = new PostRemoteEvent(ECHud, static_cast<unsigned int>(eventId), false, buffer,
+                                                 kMaxPayload, 0.0f);
+    if (playerId == -1)
+        game->sendGameEventToAllPlaying(event);
+    else
+        game->sendGameEventIfConnected(static_cast<unsigned int>(playerId), event);
+    return true;
+}
+
+// [CHOSEN, not recovered] R7. The event is built as ServerGameLogic's begin-round sends build it, but
+// with executeLocally false so the server's own state is untouched.
+bool GameServer::ServerExtension::sendRoundClock(int playerId, float secondsFromNow)
+{
+    if (!m_server || !gameLogic || !(secondsFromNow >= 0.0f) || secondsFromNow > 86400.0f)
+        return false;
+    if (playerId != -1 && !world::playerManager->getPlayerFromId(playerId))
+        return false;
+    const unsigned int tick = WorldPref::getTickCount() + static_cast<unsigned int>(30.0f * secondsFromNow + 0.5f);
+    BeginRoundEvent* event = new BeginRoundEvent(gameLogic->getBeginRoundState(), tick, false, false);
+    if (playerId == -1)
+        game->sendGameEventToAllConnected(event);
+    else
+        game->sendGameEventIfConnected(static_cast<unsigned int>(playerId), event);
+    return true;
+}
+
+// [CHOSEN, not recovered] R7. SquadOrder::flag2C (the accepted flag) starts clear, as for a new order.
+bool GameServer::ServerExtension::issueSquadOrder(int team, int squad, int orderId, unsigned short targetNetId,
+                                                  const float* points, bool commander)
+{
+    if (!m_server || !squadManager || !points || (team != 1 && team != 2) || squad <= 0)
+        return false;
+    ISquadManager* const squads = static_cast<ISquadManager*>(squadManager);
+    if (world::playerManager->getNrOfPlayersInSquad(team, squad) == 0)   // a squad exists while it has members
+        return false;
+    SquadOrder order;
+    std::memset(&order, 0, sizeof(order));
+    order.orderId = orderId;
+    order.targetNetId = targetNetId;
+    for (int k = 0; k < 3; ++k)
+    {
+        order.points[k].x = points[3 * k];
+        order.points[k].y = points[3 * k + 1];
+        order.points[k].z = points[3 * k + 2];
+    }
+    order.flag2C = false;
+    if (commander)
+        squads->issueCommanderOrder(team, squad, order, false);
+    else
+        squads->issueSquadOrder(team, squad, order, false);
     return true;
 }
 
