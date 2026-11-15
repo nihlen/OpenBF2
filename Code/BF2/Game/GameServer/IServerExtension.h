@@ -1,5 +1,5 @@
 // [CHOSEN, not recovered] OpenBF2 server-extension surface for native modules. No retail image has
-// it. Design record: openbf2-server-ext docs/protocol.md R1, and docs/admin-channel-draft.md R4, R5
+// it. Design record: openbf2-server-ext docs/protocol.md R1, and docs/admin-channel.md R4, R5
 // and R7 (local design; no upstream issue yet).
 //
 // GameServer publishes one instance as the named singleton "OpenBF2ServerExtension" (flag 4,
@@ -81,7 +81,7 @@ public:
     /// @return The status, or -1 when no game logic exists.
     virtual int getGameStatus() = 0;
 
-    // ---- v2 (openbf2-server-ext docs/protocol.md "v2", R5 in docs/admin-channel-draft.md) ----
+    // ---- observers (openbf2-server-ext docs/protocol.md "Events", R5 in docs/admin-channel.md) ----
 
     /// One application of damage, as GameLogicDamage::serverGiveDamage hands it to the victim's
     /// armour. Pointers are valid only for the duration of the observer call. Plain data, so the
@@ -191,8 +191,8 @@ public:
     /// IGameLogic::getTimeToNextStateChange in seconds, or -1 with no game logic.
     virtual float getTimeToNextStateChange() = 0;
 
-    // ---- admin channel phase 1 (openbf2-server-ext docs/admin-channel-draft.md, R4 and the
-    // appended getters; layouts in docs/findings/admin-phase1.md) ----
+    // ---- admin channel (openbf2-server-ext docs/admin-channel.md "Engine interface": R4 and the
+    // appended getters) ----
 
     /// One argument of a script event, decoded back from the Python tuple the engine built for
     /// PythonHost::handleEvent. Plain data; every pointer is valid only during the listener call.
@@ -329,7 +329,7 @@ public:
     /// @return False on a client (non-dedicated) image, for null, or when a source is installed.
     virtual bool setTickSource(ITickSource* source) = 0;
 
-    // ---- projectile collisions (openbf2-server-ext docs/findings/tv-hitbox.md) ----
+    // ---- projectile collisions (openbf2-server-ext docs/admin-channel.md "Hit/miss replay") ----
 
     /// One collision the server reports to a projectile (GenericProjectile::handleCollision), before
     /// its collision component decides between impact, ricochet, penetration and detonation. Tells
@@ -380,7 +380,7 @@ public:
     /// @return The latency, or -1 when the player does not exist.
     virtual float getLagCompensation(int playerId) = 0;
 
-    // ---- R7 client presentation hooks (openbf2-server-ext docs/admin-channel-draft.md "R7") ----
+    // ---- R7 client presentation hooks (openbf2-server-ext docs/admin-channel.md R7) ----
 
     /// Sends a HUD event (PostRemoteEvent on ECHud) with up to 52 payload bytes to one player, or to
     /// every playing client for -1. Only ids whose retail client handlers read the payload as plain

@@ -5,7 +5,7 @@
 #include "GameServer.h"
 #include "IServerExtension.h"              // [CHOSEN, not recovered] openbf2-server-ext R1
 #include "ServerExtensionHooks.h"          // [CHOSEN, not recovered] openbf2-server-ext R5
-#include "../Objects/Projectiles/GenericProjectile.h"   // [CHOSEN, not recovered] getProjectileInfo, v2
+#include "../Objects/Projectiles/GenericProjectile.h"   // [CHOSEN, not recovered] getProjectileInfo
 #include "../GameEvents/MedalEvent.h"                   // [CHOSEN, not recovered] admin channel: sendMedalEvent
 #include "../GameEvents/RankEvent.h"                    // [CHOSEN, not recovered] admin channel: setRank
 #include "../GameLogic/ScoreSystem/ScoreManager.h"      // [CHOSEN, not recovered] admin channel: getRoundInfo
@@ -218,15 +218,15 @@ public:
     }
 
     virtual int findSpawnGroup(int team, bool enterOnSpawn);
-    virtual int listSpawnGroups(int team, SpawnGroupInfo* out, int capacity);   // protocol.md v1
-    virtual bool restartRound();                                                // protocol.md v1
-    virtual int getGameStatus() { return m_server && gameLogic ? gameLogic->getGameStatus() : -1; }   // v1
-    virtual bool addDamageObserver(IDamageObserver* observer)                    // protocol.md v2, R5
+    virtual int listSpawnGroups(int team, SpawnGroupInfo* out, int capacity);   // protocol.md "Spawning"
+    virtual bool restartRound();                                                // protocol.md "Spawning"
+    virtual int getGameStatus() { return m_server && gameLogic ? gameLogic->getGameStatus() : -1; }   // "Spawning"
+    virtual bool addDamageObserver(IDamageObserver* observer)                    // protocol.md "Events", R5
     {
         return serverExtensionHooks::damageObservers().add(observer);
     }
     virtual void removeDamageObserver(IDamageObserver* observer) { serverExtensionHooks::damageObservers().remove(observer); }
-    virtual bool getProjectileInfo(world::IObject* object, ProjectileInfo& info);   // protocol.md v2
+    virtual bool getProjectileInfo(world::IObject* object, ProjectileInfo& info);   // protocol.md "State"
     virtual bool addProjectileObserver(IProjectileObserver* observer)
     {
         return serverExtensionHooks::projectileObservers().add(observer);
@@ -237,7 +237,7 @@ public:
     }
     virtual bool addSpotObserver(ISpotObserver* observer) { return serverExtensionHooks::spotObservers().add(observer); }
     virtual void removeSpotObserver(ISpotObserver* observer) { serverExtensionHooks::spotObservers().remove(observer); }
-    virtual int getBeginRoundState()                                             // protocol.md v2
+    virtual int getBeginRoundState()                                             // protocol.md "State"
     {
         return m_server && gameLogic ? static_cast<int>(gameLogic->getBeginRoundState()) : -1;
     }
@@ -477,7 +477,7 @@ int GameServer::ServerExtension::findSpawnGroup(int team, bool enterOnSpawn)
     return -1;
 }
 
-// [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md v1, "Blocked spawns". Reports what
+// [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md "Spawning". Reports what
 // the module's spawn fallback needs through the same typed ISpawnGroup/ISpawnPoint calls as
 // findSpawnGroup; it changes no spawn state.
 int GameServer::ServerExtension::listSpawnGroups(int team, SpawnGroupInfo* out, int capacity)
@@ -516,7 +516,7 @@ int GameServer::ServerExtension::listSpawnGroups(int team, SpawnGroupInfo* out, 
     return count;
 }
 
-// [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md v1, "Blocked spawns". The body of
+// [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md "Spawning". The body of
 // the admin.restartMap console command (BanListConsole.cpp adminRestartMap).
 bool GameServer::ServerExtension::restartRound()
 {
@@ -528,8 +528,8 @@ bool GameServer::ServerExtension::restartRound()
 
 namespace world { extern IBase* scoreManager; }   // Core/Globals.cpp, as EndOfRoundEvent.cpp declares it
 
-// [CHOSEN, not recovered] openbf2-server-ext docs/admin-channel-draft.md, appended getters and
-// commands for the admin channel (layouts in docs/findings/admin-phase1.md). Each reads or calls
+// [CHOSEN, not recovered] openbf2-server-ext docs/admin-channel.md "Engine interface": the
+// appended getters and commands for the admin channel. Each reads or calls
 // what the matching console command or Python wrapper does; none changes a retail body.
 bool GameServer::ServerExtension::getServerInfo(ServerInfo& out)
 {
@@ -646,7 +646,7 @@ bool GameServer::ServerExtension::sendHudEvent(int playerId, int eventId, int da
     return true;
 }
 
-// [CHOSEN, not recovered] R7 (openbf2-server-ext docs/admin-channel-draft.md). The whitelist holds the
+// [CHOSEN, not recovered] R7 (openbf2-server-ext docs/admin-channel.md). The whitelist holds the
 // HUD ids whose client handlers (Menu/BF2HudManagerHudEvents.cpp, Bf2MenuMapNode.cpp,
 // HudVehicleInformation.cpp, HudInformationLayer.cpp) read the payload as plain data. Ids such as 7,
 // 12, 17, 38 and 73 treat it as a pointer (73 frees it) and must never be sent from here.
@@ -752,7 +752,7 @@ bool GameServer::ServerExtension::killPlayer(int playerId)
     return gameLogic->killPlayer(player, true, true);
 }
 
-// [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md v2 item 5. GenericProjectile is the
+// [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md "State". GenericProjectile is the
 // sole implementor of IProjectileObject, the cast FireComp and GameLogicDamage already make.
 bool GameServer::ServerExtension::getProjectileInfo(world::IObject* object, ProjectileInfo& info)
 {

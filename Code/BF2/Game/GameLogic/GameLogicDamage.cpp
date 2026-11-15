@@ -80,8 +80,8 @@ int designatedTargetGetPlayerId(IObject* target)
     return static_cast<TargetObject*>(target)->getTargetPlayerId();
 }
 
-// [CHOSEN, not recovered] openbf2-server-ext R5 (docs/protocol.md v2 item 8,
-// docs/admin-channel-draft.md R5): the record serverGiveDamage hands the damage observers. Not in
+// [CHOSEN, not recovered] openbf2-server-ext R5 (docs/protocol.md "Events",
+// docs/admin-channel.md R5): the record serverGiveDamage hands the damage observers. Not in
 // any retail image.
 const int kMaxObservedKills = 16;
 
@@ -525,8 +525,8 @@ void GameLogicDamage::serverGiveDamage(IObject* object, float damage, IPlayer* a
         IArmorGLComp* attackerArmor = findArmor(attacker->getVehicle(), dummy);   // +0x48
         perpetrator = attackerArmor == armor ? 0 : attacker;
     }
-    // [CHOSEN, not recovered] openbf2-server-ext R5 damage observer (docs/protocol.md v2 item 8,
-    // docs/admin-channel-draft.md R5). Read-only; the retail calls below are unchanged.
+    // [CHOSEN, not recovered] openbf2-server-ext R5 damage observer (docs/protocol.md "Events",
+    // docs/admin-channel.md R5). Read-only; the retail calls below are unchanged.
     const bool observed = !serverExtensionHooks::damageObservers().empty();
     const float hitPointsBefore = observed ? armor->getHitPoints() : 0.0f;
     armor->damage(damage, perpetrator);                                           // +0x40

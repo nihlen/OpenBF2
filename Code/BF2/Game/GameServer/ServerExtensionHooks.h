@@ -1,6 +1,6 @@
 // [CHOSEN, not recovered] Engine-side observer tables behind IServerExtension's observers. No
-// retail image has them. Design record: openbf2-server-ext docs/protocol.md "v2" (items 5, 6 and 8)
-// and docs/admin-channel-draft.md R4 and R5 (local design; no upstream issue yet).
+// retail image has them. Design record: openbf2-server-ext docs/protocol.md "State" and "Events",
+// and docs/admin-channel.md R4 and R5 (local design; no upstream issue yet).
 //
 // Each table is defined beside its only notify site (GameLogicDamage.cpp, FireComp.cpp,
 // GenericProjectile.cpp, SpottedEvent.cpp, PythonHost.cpp), so every image that links the site links the table. GameServer's
@@ -70,7 +70,7 @@ ObserverTable<IServerExtension::IProjectileObserver>& projectileObservers();
 ObserverTable<IServerExtension::IProjectileCollisionObserver>& projectileCollisionObservers();
 /// Observers of SpottedEvent::executeServer; defined in SpottedEvent.cpp.
 ObserverTable<IServerExtension::ISpotObserver>& spotObservers();
-/// The single script-event listener (R4, docs/admin-channel-draft.md), or null; defined in
+/// The single script-event listener (R4, docs/admin-channel.md), or null; defined in
 /// Game/Python/PythonHost.cpp beside PythonHost::handleEvent.
 IServerExtension::IScriptEventListener*& scriptEventListener();
 /// The frame loop's tick source (R3, stepped time), or null for the wall clock; defined in

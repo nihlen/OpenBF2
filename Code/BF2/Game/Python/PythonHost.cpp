@@ -793,7 +793,7 @@ PythonHostData::~PythonHostData()
     // nested-vector walk are.
 }
 
-// [CHOSEN, not recovered] openbf2-server-ext docs/admin-channel-draft.md R4: the script-event
+// [CHOSEN, not recovered] openbf2-server-ext docs/admin-channel.md R4: the script-event
 // observer. No retail image has it. handleEvent hands every event's argument tuple, decoded back to
 // typed values, to the module listener set through IServerExtension::setScriptEventListener,
 // before the Python handlers run. Python's own behaviour does not change: the decoder only reads

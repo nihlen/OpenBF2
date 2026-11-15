@@ -9,7 +9,7 @@
 #include "../../AI/AIInterface/AIInstance.h"     // aiInstance()->isBotsGame()  (ds:0x8AC37F8)
 #include "../../Core/EventManager.h"             // eventManager->postEvent
 #include "../../IO/BitStream.h"                  // readBits / writeBits
-#include "../GameServer/ServerExtensionHooks.h"  // [CHOSEN, not recovered] openbf2-server-ext v2
+#include "../GameServer/ServerExtensionHooks.h"  // [CHOSEN, not recovered] openbf2-server-ext
 
 namespace dice {
 namespace hfe {
@@ -59,7 +59,7 @@ void SpottedEvent::executeClient()
 // The received HUD event ID is forwarded without validation.
 bool SpottedEvent::executeServer(int connectionId)
 {
-    // [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md v2 item 6: tell the spot
+    // [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md "State": tell the spot
     // observers. Read-only; the retail body below is unchanged.
     {
         serverExtensionHooks::ObserverTable<IServerExtension::ISpotObserver>& observers =
@@ -174,7 +174,7 @@ bool SpottedEvent::serialize(io::BitStream* stream)
 
 namespace serverExtensionHooks {
 
-// [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md v2 item 6. The table lives beside its
+// [CHOSEN, not recovered] openbf2-server-ext docs/protocol.md "State". The table lives beside its
 // only notify site.
 ObserverTable<IServerExtension::ISpotObserver>& spotObservers()
 {

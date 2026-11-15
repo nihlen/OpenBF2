@@ -126,7 +126,7 @@ public:
     int getCurrentLevel() const;
     int getNextLevel() const;                         // : return calcNextMapIndex()
 
-    // [CHOSEN, not recovered] openbf2-server-ext docs/admin-channel-draft.md: read-only accessors for
+    // [CHOSEN, not recovered] openbf2-server-ext docs/admin-channel.md: read-only accessors for
     // IServerExtension::getRoundInfo (GameServer.cpp). Inline and non-virtual, so the class layout
     // and vtable are unchanged; no retail image has them.
     unsigned int getServerExtRoundStartTick() const { return m_roundStartTick; }

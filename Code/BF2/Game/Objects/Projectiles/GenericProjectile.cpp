@@ -878,10 +878,11 @@ void GenericProjectile::handleMessage(TemplateMessage message, IPlayer* player, 
 
 namespace {
 
-// [CHOSEN, not recovered] openbf2-server-ext docs/findings/tv-hitbox.md: reports the collision to the
-// module's projectile-collision observers. Read-only. otherRewound restates the test the collision
-// paths make (PointResponsePhysics::checkObjectVsObject, SoldierResponsePhysics::checkSoldierVsPoint):
-// only an object whose own physics node keeps a latency history is tested at its rewound pose.
+// [CHOSEN, not recovered] openbf2-server-ext docs/admin-channel.md "Hit/miss replay": reports the
+// collision to the module's projectile-collision observers. Read-only. otherRewound restates the
+// test the collision paths make (PointResponsePhysics::checkObjectVsObject,
+// SoldierResponsePhysics::checkSoldierVsPoint): only an object whose own physics node keeps a
+// latency history is tested at its rewound pose.
 void notifyProjectileCollisionObservers(IObject* projectile, IPlayer* shooter, IObject* other,
                                         const Vec3& impact, const Vec3& normal, const Vec3& speed,
                                         int material)
@@ -2349,8 +2350,8 @@ namespace dice {
 namespace hfe {
 namespace serverExtensionHooks {
 
-// [CHOSEN, not recovered] openbf2-server-ext docs/findings/tv-hitbox.md. The table lives beside its only
-// notify site, GenericProjectile::handleCollision.
+// [CHOSEN, not recovered] openbf2-server-ext docs/admin-channel.md "Hit/miss replay". The table lives
+// beside its only notify site, GenericProjectile::handleCollision.
 ObserverTable<IServerExtension::IProjectileCollisionObserver>& projectileCollisionObservers()
 {
     static ObserverTable<IServerExtension::IProjectileCollisionObserver> table;

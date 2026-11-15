@@ -1,16 +1,16 @@
 # Server extension (`IServerExtension`)
 
 `IServerExtension` is a native interface that the dedicated server publishes for an out-of-tree module,
-`libserverext.so` from the openbf2-server-ext repository (`C:\Data\Projects\openbf2-server-ext`). The module gives
+`libserverext.so` from [openbf2-server-ext](https://github.com/nihlen/openbf2-server-ext). The module gives
 external tools a typed interface to the running game: a bot channel for a bot sidecar and an admin channel for
 BF2WebAdmin. No retail image has any of this. Every part is `[CHOSEN, not recovered]` and carries that marker in
 the source.
 
-These changes are local only. They live in local commits on branch `serverext/r1`, not merged into `main` and never pushed: `9e1cda6`, `540fa88`,
-`74e18d9`, `873d1b1` and the R3 commit after them, each marked "local, not for upstream". There is no upstream issue for them. The design
-record is in the module's contracts, `docs/protocol.md` (R1, R1b, v1, v2) and `docs/admin-channel-draft.md` (R4, R5).
-How the engine, the module, the sidecar and WebAdmin fit together, and how to build and test them, is in that repo's
-`docs/system.md`.
+These changes are not upstream's. They live on branch `serverext/r1` of the fork
+[nihlen/OpenBF2](https://github.com/nihlen/OpenBF2/tree/serverext/r1), in commits marked "local, not for upstream",
+and are not merged into `main`. There is no upstream issue for them. The design record is in the module's documents:
+`docs/protocol.md` ("Engine requirements": R1, R1b, R2, R3) and `docs/admin-channel.md` ("Engine interface": R4, R5,
+R7). The module's README covers how to build it against this branch and how to make a release.
 
 [AGENTS.md](../AGENTS.md) applies to these changes as to any other: keep them small, keep them marked, and don't open
 pull requests.
@@ -35,9 +35,9 @@ this header and calls through its vtable. Every method must be called on the mai
 
 | Group | Methods | Used for |
 |---|---|---|
-| Bots (R1, v1) | `createInputPlayer`, `findSpawnGroup`, `listSpawnGroups` (`SpawnGroupInfo`), `restartRound`, `getGameStatus` | Creating a connection-less, AI-flagged player whose input the module writes, without the AI library. Finding the team's spawn groups for the spawn fallback. Round restarts. |
-| Observers (v2, R5) | `addDamageObserver`/`removeDamageObserver` (`DamageInfo`), `addProjectileObserver`/`remove…`, `getProjectileInfo` (`ProjectileInfo`), `addSpotObserver`/`remove…` (`SpotInfo`), `getBeginRoundState`, `getTimeToNextStateChange` | Read-only notification of damage, projectile launches and spotted messages, plus the round's begin state. They feed the bot channel's `Damage`, `Kill`, `ProjectileList` and `RoundState`, and the admin channel's events. |
-| Projectile collisions | `addProjectileCollisionObserver`/`remove…` (`ProjectileCollisionInfo`), `getLagCompensation` | Read-only notification of every collision the server hands to a projectile: the object part touched (a vehicle's hull, a child part such as a rotor or a dummy missile, a soldier; null for terrain), the impact point, normal, relative speed and material, the shooter's lag-compensation latency, and whether the part was tested at its rewound pose. Damage is booked to the nearest armour up the parent chain, so `DamageInfo` cannot tell the parts apart. `getLagCompensation` returns a player's current lag compensation (`LatencyCompensation::getLatency`). They feed the admin channel's lag in `PlayerState`, `ProjectileCollision` and `ProjectileTrace`. Design and measurements: openbf2-server-ext `docs/findings/tv-hitbox.md`. |
+| Bots (R1) | `createInputPlayer`, `findSpawnGroup`, `listSpawnGroups` (`SpawnGroupInfo`), `restartRound`, `getGameStatus` | Creating a connection-less, AI-flagged player whose input the module writes, without the AI library. Finding the team's spawn groups for the spawn fallback. Round restarts. |
+| Observers (R5) | `addDamageObserver`/`removeDamageObserver` (`DamageInfo`), `addProjectileObserver`/`remove…`, `getProjectileInfo` (`ProjectileInfo`), `addSpotObserver`/`remove…` (`SpotInfo`), `getBeginRoundState`, `getTimeToNextStateChange` | Read-only notification of damage, projectile launches and spotted messages, plus the round's begin state. They feed the bot channel's `Damage`, `Kill`, `ProjectileList` and `RoundState`, and the admin channel's events. |
+| Projectile collisions | `addProjectileCollisionObserver`/`remove…` (`ProjectileCollisionInfo`), `getLagCompensation` | Read-only notification of every collision the server hands to a projectile: the object part touched (a vehicle's hull, a child part such as a rotor or a dummy missile, a soldier; null for terrain), the impact point, normal, relative speed and material, the shooter's lag-compensation latency, and whether the part was tested at its rewound pose. Damage is booked to the nearest armour up the parent chain, so `DamageInfo` cannot tell the parts apart. `getLagCompensation` returns a player's current lag compensation (`LatencyCompensation::getLatency`). They feed the admin channel's lag in `PlayerState`, `ProjectileCollision` and `ProjectileTrace`. The wire format and how the server decides a hit: openbf2-server-ext `docs/admin-channel.md`, "Hit/miss replay". |
 | Stepped time (R3) | `setTickSource` (`ITickSource`) | Bot tests faster than real time: the module decides each dedicated-server frame's ticks (`serverext.cfg stepMode 1`, protocol v4 `Step`). Set once at load; the retail wall-clock loop runs when none is installed. |
 | Client presentation (R7) | `sendHudEventRaw`, `sendRoundClock`, `issueSquadOrder` | HUD features the retail client already has: a whitelisted HUD event (`PostRemoteEvent` on ECHud) with up to 52 payload bytes (map markers, notices, help hints), a `BeginRoundEvent` that moves the client's round clock and banner without touching the server's state, and squad or commander orders through the retail `SquadManager`. They feed the admin channel's `HudEventRaw`, `RoundClock` and `SquadOrder`. |
 | Admin channel (R4 and getters) | `setScriptEventListener` (`ScriptEventArg`), `getServerInfo`, `getRoundInfo`, `getTeamName`, `getCdKeyHash`, `getDisconnectReason`, `getMapList`, `runMapListEntry`, `sendGameLogicEvent`, `sendHudEvent`, `sendMedalEvent`, `setRank`, `killPlayer` | Every script event (the Python game events), decoded for the module, and the server state and commands BF2WebAdmin used to reach through `mm_webadmin.py`. |
@@ -78,16 +78,17 @@ variable whose default keeps retail behaviour; set it with `vars.set <name> <val
 
 | Variable | Site | Effect |
 |---|---|---|
-| `tv-aim-from-missile` (float, default 0) | `LPTargetComp::updateTargetObject` (`Game/Objects/Weapons/TargetComponents/LPTargetComp.cpp`) | The client's camera trails the server's missile by its lag, so the retail aim point (the first hit of the client's ray) can lie beside or behind the server's missile near a wall, and `DefaultFollowComp` stops turning. Above 0, the retail placement runs first; only when its aim point is less than two ticks of travel ahead of the missile is the ray cast again, in the client's direction from the server's missile. This applies only while the launcher watches the missile's camera and the client's eye lies within that many metres of the missile; a direction from farther away (a bot aiming from its vehicle) keeps the retail placement. In that case the target is placed twice in one update, so a lock warning can change twice. Tested with bots on a WSL server (openbf2-server-ext `docs/system.md`; 50 m); a human client is untested. |
+| `tv-aim-from-missile` (float, default 0) | `LPTargetComp::updateTargetObject` (`Game/Objects/Weapons/TargetComponents/LPTargetComp.cpp`) | The client's camera trails the server's missile by its lag, so the retail aim point (the first hit of the client's ray) can lie beside or behind the server's missile near a wall, and `DefaultFollowComp` stops turning. Above 0, the retail placement runs first; only when its aim point is less than two ticks of travel ahead of the missile is the ray cast again, in the client's direction from the server's missile. This applies only while the launcher watches the missile's camera and the client's eye lies within that many metres of the missile; a direction from farther away (a bot aiming from its vehicle) keeps the retail placement. In that case the target is placed twice in one update, so a lock warning can change twice. Tested with bots on a WSL server (at 50 m); a human client is untested. |
 | `tv-turn-behind` (int, default 0) | `DefaultFollowComp::followTarget` (`Game/Objects/Projectiles/FollowComponents/DefaultFollowComp.cpp`) | Retail turns a missile only towards an aim point in front of it (local z > 0); a TV gunner who looks more than 90° away from the missile's nose gets a missile that flies straight until the look comes back. Non-zero keeps turning towards such a point at the same per-tick caps (`follow.maxYaw`/`maxPitch`, 1.5° for `agm114_hellfire_tv`), measuring its horizontal angle past 90°. Only for a missile from a TV-guided launcher (`TSTVGuided`) while the launcher watches the missile's camera; a missile nobody watches keeps the retail rule, so it does not turn back to its last aim point. Tested with bots on a WSL server: a look 110° to 150° away turns the missile at the caps (retail: no turn); turns in front are unchanged. A human client is untested. |
 
 ## Changing it
 
 - Find every site with `rg "openbf2-server-ext"` in `Code/BF2`.
 - Change the module's contract first. A change to the engine surface is an R-item in openbf2-server-ext
-  `docs/protocol.md` or `docs/admin-channel-draft.md`. The author approves it before it is implemented.
+  `docs/protocol.md` ("Engine requirements") or `docs/admin-channel.md` ("Engine interface"). The author approves it
+  before it is implemented.
 - Append methods and struct fields only where the module is rebuilt against the new header in the same step. The
-  localtest image builds engine and module from the same pair of commits for this reason.
+  module's release build (`release/build.sh`) builds engine and module from the same pair of commits for this reason.
 - Validate as [development.md](development.md) requires for a shared header. Then build the module against the
   checkout (`build-module.sh` in openbf2-server-ext) and run it on a server with representative content. A compile
   proves neither dispatch nor gameplay.
