@@ -48,6 +48,11 @@ float* const g_tvAimFromMissile = Vars::getFloat("tv-aim-from-missile", 0.0f);
 // Set while updateTargetObject casts again from the missile, so it does not recurse further.
 bool g_tvRecasting = false;
 
+// [CHOSEN, not recovered] Local serverext/r1 change, not for upstream (no issue). 0 keeps retail.
+// Non-zero: a launcher's reload leaves the aim point of its TV missile active while the launcher
+// watches the missile's camera; see reload.
+int* const g_tvKeepAimOnReload = Vars::getInt("tv-keep-aim-on-reload", 0);
+
 IPlayerControlObject* findPco(IObject* object)
 {
     for (; object; object = object->getParent())
@@ -271,7 +276,17 @@ void LPTargetComp::disable()
 
 void LPTargetComp::reload(ReloadState state)
 {
-    setTargetObject(getTargetObject(), false, 0);
+    // [CHOSEN, not recovered] tv-keep-aim-on-reload. Retail clears the lock here, which switches the
+    // aim point off. A TV launcher reloads about a second after its shot, so the missile in flight
+    // stops turning until the next TargetDirectionEvent places the aim point again (two or three
+    // ticks with a client that steers, for good with one that does not). With the setting the aim
+    // point stays as it is while the launcher watches its missile's camera; a missile nobody
+    // watches keeps the retail behaviour.
+    GenericProjectile* const flying = projectileFromObject(m_currentProjectile.get());
+    const bool keepAim = *g_tvKeepAimOnReload != 0 && getTargetSystem() == TSTVGuided && flying
+        && flying->isInProjectileCamera();
+    if (!keepAim)
+        setTargetObject(getTargetObject(), false, 0);
     if (m_lpTemplate->getDisableGuidanceOnReload())
         m_currentProjectile = WeakPtr<IObject>();
     TargetComp::reload(state);
