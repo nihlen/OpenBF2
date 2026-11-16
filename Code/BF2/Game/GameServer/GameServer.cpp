@@ -124,6 +124,7 @@
 #include "../Objects/Game/StickyProjectileManager.h" // ctor/shutdown-owned singleton
 #include "../Objects/ObjectLayoutAccess.h"      // simulatePlayersUpdate reads the vehicle's parent link
 #include "../Utility/Vars.h"                    // coll-dump-all-tests
+#include "../Objects/Projectiles/TVInputQueue.h"    // [CHOSEN, not recovered] tv-input-queue
 #include "../../Scene/Object/PlayerManager.h"   // playerManager - the local human player, the player list
 #include "../../Physics/PhysicsNodeManager.h"   // physicsNodeManager->update / postFrameUpdate
 #include "../../Physics/ResponsePhysicsManager.h"   // responsePhysicsManager - the frame protocol
@@ -3639,6 +3640,22 @@ bool GameServer::isRecordingDemo() const
     return false;
 }
 
+namespace {
+
+// [CHOSEN, not recovered] Local serverext/r1 change, not for upstream (no issue). 0 keeps retail.
+// Above 0 (at most 8): while a player guides a TV missile through its camera, the server keeps
+// this many of the player's actions waiting in the ActionBuffer. See simulatePlayerUpdate.
+int* const g_tvInputQueue = Vars::getInt("tv-input-queue", 0);
+
+// The depth tv-input-queue asks for this player's ActionBuffer now, 0 for none.
+int tvInputQueueTarget(world::IPlayer* player)
+{
+    const int target = world::tv_input_queue::clampTarget(*g_tvInputQueue);
+    return target > 0 && world::tv_input_queue::guiding(player->getId()) ? target : 0;
+}
+
+} // namespace
+
 // : for every connection with a player, trim its ActionBuffer down to 4 entries
 // (popping the front while size() > 4) and resetTickCounter(); then clear the queued local inputs.
 // A connection without a Player advances to the next map node at 0x80B4BE0; it does not bypass the
@@ -3651,9 +3668,15 @@ void GameServer::clearPlayerActions()
         if (!player)
             continue;
 
-        if (player->getActionBuffer()->size() > 4)                   // something older than the last 4?
+        // [CHOSEN, not recovered] tv-input-queue. Retail keeps 4. A held queue sits at its target
+        // and takes a packet's actions on top, so its limit is the target plus 4; the retail limit
+        // returns with the tick the hold ends.
+        const int held = tvInputQueueTarget(player);
+        const int limit = held > 0 ? held + 4 : 4;
+
+        if (player->getActionBuffer()->size() > limit)               // something older than the last 4?
         {
-            while (player->getActionBuffer()->size() > 4)            // drop the oldest until 4 remain
+            while (player->getActionBuffer()->size() > limit)        // drop the oldest until 4 remain
                 player->getActionBuffer()->m_entries.pop_front();
             player->resetTickCounter();                              // IPlayer +0xDC
         }
@@ -3844,7 +3867,25 @@ bool GameServer::simulatePlayerUpdate(world::IPlayer* player, float dt)
     {
         ActionBuffer* buffer = player->getActionBuffer();
 
-        if (buffer->m_entries.empty())
+        // [CHOSEN, not recovered] tv-input-queue. The client's clock runs ahead of this server's
+        // tick by the number of its actions that are not consumed yet, and it draws the missile at
+        // that clock minus its interpolation time, so each action left waiting here moves the
+        // gunner's view one tick closer to the present. TV steering is a game event that is applied
+        // on arrival, not an action, so it is not delayed by the queue. While the player guides a
+        // TV missile and no more than the target wait, this update replays the current action
+        // instead of consuming one, exactly as retail does with an empty queue. The replay count
+        // bounds the hold: a client that stops sending is consumed again after that many ticks.
+        // A queue that stayed above the target for a whole window loses its oldest action
+        // unexecuted, as the retail trim drops them (below). When the flight ends the same rule
+        // brings the queue back to the depth it had when the flight began, one action per window,
+        // so the player's other inputs are not left later than they were.
+        const int queueTarget = tvInputQueueTarget(player);
+        const bool hold = queueTarget > 0 && !buffer->m_entries.empty()
+            && buffer->size() <= queueTarget && buffer->m_replayCount < queueTarget;
+        if (hold)
+            ++world::tv_input_queue::slot(player->getId()).held;
+
+        if (buffer->m_entries.empty() || hold)
         {
             // nothing queued - replay m_current, see the header block
             const int replays = buffer->m_replayCount;
@@ -3871,6 +3912,34 @@ bool GameServer::simulatePlayerUpdate(world::IPlayer* player, float dt)
 
             buffer->m_entries.erase(buffer->m_entries.begin());
             buffer->m_replayCount = 0;                  // a real action resets the run
+        }
+        // [CHOSEN, not recovered] tv-input-queue: the depth for the TV trace, and the drop.
+        world::tv_input_queue::Slot& queueSlot = world::tv_input_queue::slot(player->getId());
+        queueSlot.queued = buffer->size();
+        if (queueTarget > 0)
+            queueSlot.restoreWindows = world::tv_input_queue::kRestoreWindows;
+        if (queueTarget > 0 || queueSlot.restoreWindows > 0)
+        {
+            const int drainTo = queueTarget > 0 ? queueTarget : queueSlot.baseline;
+            if (queueSlot.queued < queueSlot.windowMin)
+                queueSlot.windowMin = queueSlot.queued;
+            if (++queueSlot.windowTicks >= world::tv_input_queue::kWindowTicks)
+            {
+                if (queueSlot.windowMin > drainTo && !buffer->m_entries.empty())
+                {
+                    buffer->m_entries.pop_front();
+                    ++queueSlot.dropped;
+                    queueSlot.queued = buffer->size();
+                    if (queueTarget == 0)
+                        --queueSlot.restoreWindows;
+                }
+                else if (queueTarget == 0)
+                {
+                    queueSlot.restoreWindows = 0;       // back at the depth before the flight
+                }
+                queueSlot.windowMin = 0x7fffffff;
+                queueSlot.windowTicks = 0;
+            }
         }
         chosen = &input;
     }

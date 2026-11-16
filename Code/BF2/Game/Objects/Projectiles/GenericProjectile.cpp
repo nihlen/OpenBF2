@@ -14,6 +14,10 @@
 
 #include "GenericProjectileTemplate.h"
 #include "GrenadeTrace.h"
+#include "TVInputQueue.h"                           // [CHOSEN, not recovered] tv-input-queue
+#include "TVMissileTrace.h"                         // [TEMP] the input_queue trace row
+#include "../../GameLogic/ActionBuffer.h"           // the gunner's queue depth for that row
+#include "../../Utility/Vars.h"                     // tv-input-queue
 #include "../../GameEvents/MissileInitEvent.h"
 #include "../../IGame.h"
 #include "../../IGameLogic.h"                       // gameLogic - launch authority/list gate
@@ -60,6 +64,10 @@ namespace world {
 extern IBase* materialManager;      // ds:0x8AD2820, defined in Core/Globals.cpp
 
 namespace {
+
+// [CHOSEN, not recovered] Local serverext/r1 change, not for upstream (no issue). The setting is
+// described in GameServer.cpp; here it only decides whether handleUpdate marks a guiding player.
+int* const g_tvInputQueue = Vars::getInt("tv-input-queue", 0);
 
 // IScaleable consists of the IBase quartet followed by setScale. Both activate and updateTracer
 // query exactly this IID before making the typed call at +0x10.
@@ -588,6 +596,33 @@ void GenericProjectile::handleUpdate(float dt, unsigned int flags)
     m_vec210 = getAbsolutePosition();
     if (m_trailEffectObject)
         m_trailEffectObject->setAbsolutePosition(getAbsolutePosition());
+
+    // [CHOSEN, not recovered] tv-input-queue and the TV missile trace. Only with the setting or the
+    // trace on: a missile whose launcher watches its camera marks its player as guiding for this
+    // tick, and the trace gets one row with the player's input queue.
+    if (m_projectileCamera && (*g_tvInputQueue > 0 || tv_missile_trace::armed()) && gameLogic->isServer())
+    {
+        IPlayer* const gunner = getPlayer();
+        if (gunner && isInProjectileCamera())
+        {
+            tv_input_queue::noteGuiding(gunner->getId());
+            if (tv_missile_trace::armed())
+            {
+                // A bot has no ActionBuffer: its row carries -1 in the five queue fields.
+                ActionBuffer* const buffer = gunner->getIsAIPlayer() ? 0 : gunner->getActionBuffer();
+                const tv_input_queue::Slot& slot = tv_input_queue::slot(gunner->getId());
+                tv_missile_trace::log(this, "input_queue",
+                    "player=%d target=%d queued=%d size_now=%d baseline=%d held=%d dropped=%d replay=%d "
+                    "consumed_index=%d received_index=%d interpolation_ms=%u ping=%u",
+                    gunner->getId(), tv_input_queue::clampTarget(*g_tvInputQueue),
+                    buffer ? slot.queued : -1, buffer ? buffer->size() : -1, buffer ? slot.baseline : -1,
+                    slot.held, slot.dropped,
+                    buffer ? buffer->m_replayCount : -1, buffer ? buffer->m_currentInputIndex : -1,
+                    buffer ? buffer->m_lastInputIndex : -1, gunner->getInterpolationTime(),
+                    gunner->getPing());
+            }
+        }
+    }
 
     if (gameLogic->isServer() || m_template->getNetworkableInfo().empty())
     {

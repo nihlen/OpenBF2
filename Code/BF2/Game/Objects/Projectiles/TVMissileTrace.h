@@ -24,6 +24,10 @@ inline bool armed()
     return enabled;
 }
 
+// Rows written per server start. Version 2 of the trace raised it from 8192 and added the
+// input_queue row (GenericProjectile::handleUpdate).
+const unsigned int kLineLimit = 32768;
+
 namespace detail {
 
 inline bool selected(const IObject* object)
@@ -74,7 +78,7 @@ inline void log(const IObject* object, const char* event, const char* format, ..
     if (!armed() || !detail::selected(object))
         return;
     detail::State& state = detail::state();
-    if (state.lines == 8192)
+    if (state.lines == kLineLimit)
         return;
     if (!state.triedOpen)
     {
@@ -90,7 +94,7 @@ inline void log(const IObject* object, const char* event, const char* format, ..
             return;
         }
         std::setvbuf(state.file, state.buffer, _IOFBF, sizeof(state.buffer));
-        std::fprintf(state.file, "[TVTRACE] begin version=1 dedicated=%d limit=8192\n", DEDICATED);
+        std::fprintf(state.file, "[TVTRACE] begin version=2 dedicated=%d limit=%u\n", DEDICATED, kLineLimit);
     }
     if (!state.file)
         return;
@@ -108,7 +112,7 @@ inline void log(const IObject* object, const char* event, const char* format, ..
         "[TVTRACE] us=%lld tick=%u object=%u net=%u event=%s %s%s\n",
         micros, WorldPref::mTickCount, object->getObjectId(),
         net ? static_cast<unsigned int>(net->m_networkableId) : 0u,
-        event, payload, state.lines == 8192 ? " trace_line_limit_reached=1" : "");
+        event, payload, state.lines == kLineLimit ? " trace_line_limit_reached=1" : "");
     if ((state.lines & 63u) == 0)
         std::fflush(state.file);
 }

@@ -43,7 +43,7 @@ changed here.
 
 ## Optional server trace
 
-`TVMissileTrace.h` and hooks in `LPTargetComp.cpp`,
+`TVMissileTrace.h` and hooks in `LPTargetComp.cpp`, `GenericProjectile.cpp`,
 `GenericProjectileNetworkable.cpp` and `GhostManager.cpp` are temporary diagnostics,
 `[CHOSEN, not recovered]`. They do not change guidance, console values, packet
 formats, scheduling or object layouts. Remove them after a joined-client trace
@@ -78,7 +78,8 @@ the enable flag is cached for each process.
 Only the stock `agm114_hellfire_tv` name is selected, case-insensitively. Without
 an explicit path the log is `bf2-tv-missiles.log` in the server's working directory.
 It is created lazily on the first matching row and appended across runs; a `begin`
-line separates each process's output. There is a process-wide limit of 8192 rows.
+line separates each process's output. There is a process-wide limit of 32768 rows
+(8192 in version 1 of the trace; the `begin` line carries the version and the limit).
 Output is buffered and flushed every 64 rows; forced termination can lose the
 tail. Logging and clock reads have diagnostic overhead when enabled.
 
@@ -88,6 +89,7 @@ tick, object ID and networkable ID. No player names or addresses are recorded.
 | Event | Meaning |
 | --- | --- |
 | `steer_dispatch` | A steering ray reached the TV targeting component on the server, before target validation/placement. This is not a raw packet-receive timestamp. |
+| `input_queue` | Version 2. Once per server tick while the launcher watches the missile's camera: the gunner's player ID, the `tv-input-queue` target, `queued` (actions left in the player's `ActionBuffer` after its last update), `size_now`, `baseline` (`queued` when the flight began), `held` (updates of this flight that left a queued action waiting), `dropped` (actions of this flight dropped unexecuted to bring the queue down), the replay count, the last consumed and the last received input index, the interpolation time the client reported and the player's ping. A bot has no `ActionBuffer`: its five queue fields are -1. |
 | `snapshot` | Current server replication record, including launch tick, pose and dirty mask. Multiple snapshots may precede a send; record time is not used as a clock. |
 | `encode_candidate` | This projectile component encoded successfully into a stream. A surrounding descriptor or ghost write can still roll it back. |
 | `ghost_selected` | The ghost update committed to that connection's packet/save bookkeeping. This does not prove UDP transmission, acknowledgement or client receipt. |
