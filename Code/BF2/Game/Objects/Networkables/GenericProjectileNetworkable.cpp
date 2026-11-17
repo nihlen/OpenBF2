@@ -479,7 +479,7 @@ void GenericProjectileNetworkable::updateStateMask(unsigned int* stateMask)
                 // -1: the gunner's view lag, I - Q ticks, smoothed (about 1 s) so the lead does not
                 // step when actions arrive two at a time.
                 pathMs = 0.0f;
-                IPlayer* const gunner = projectile->getPlayer();
+                world::IPlayer* const gunner = projectile->getPlayer();
                 ActionBuffer* const buffer = gunner && !gunner->getIsAIPlayer() ? gunner->getActionBuffer() : 0;
                 if (buffer)
                 {
