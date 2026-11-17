@@ -272,6 +272,33 @@ void ServerConnection::clientSendPlayerDatabase()
 // Called after the connection enters state 2.
 void ServerConnection::clientSendDatabase()
 {
+    clientSendObjectDatabase();
+
+    // phase D: the ELF builds two Triggerable lists here and immediately clears them without
+    // sending anything; omitted as observably empty.
+
+    // phase E: spawn groups - the client's spawn menu. fires.
+    static_cast<SpawnManager*>(spawnManager)->createAllSpawnGroupsOnClient(m_connectionId);
+
+    // phase F: the round state. fires.
+    m_gameEventManager->addEvent(new BeginRoundEvent(
+        gameLogic->getBeginRoundState(),
+        gameLogic->getNextStateChangeAtTick(),
+        serverSettings->getNoVehicles(),
+        true));
+
+    // phase G: static ghosts. fires.
+    addStaticGhosts();
+
+    // phase H: close the database. fires.
+    m_gameEventManager->addEvent(new PostRemoteEvent(ECNetwork, 4, false, 0, 0, 0.0f));
+}
+
+// [CHOSEN, not recovered] openbf2-server-ext docs/admin-channel.md R8. Phases A to C of
+// clientSendDatabase, moved here unchanged so IServerExtension::resyncClient can send them to a
+// client that is already playing. Retail has one body; a join runs both parts in the retail order.
+void ServerConnection::clientSendObjectDatabase()
+{
     // Replay create events for dynamic descriptors. Static objects (netId <= 0x281)
     // already exist from map loading and are skipped.
     if (io::networkManager)                                        // ELF guards on the singleton too
@@ -479,25 +506,6 @@ void ServerConnection::clientSendDatabase()
             m_gameEventManager->addEvent(new StickyProjectileEvent(projectile, target, transform));
         }
     }
-
-    // phase D: the ELF builds two Triggerable lists here and immediately clears them without
-    // sending anything; omitted as observably empty.
-
-    // phase E: spawn groups - the client's spawn menu. fires.
-    static_cast<SpawnManager*>(spawnManager)->createAllSpawnGroupsOnClient(m_connectionId);
-
-    // phase F: the round state. fires.
-    m_gameEventManager->addEvent(new BeginRoundEvent(
-        gameLogic->getBeginRoundState(),
-        gameLogic->getNextStateChangeAtTick(),
-        serverSettings->getNoVehicles(),
-        true));
-
-    // phase G: static ghosts. fires.
-    addStaticGhosts();
-
-    // phase H: close the database. fires.
-    m_gameEventManager->addEvent(new PostRemoteEvent(ECNetwork, 4, false, 0, 0, 0.0f));
 }
 
 // Resets ghost scopes, then selects objects relevant to the connection's camera and tools.

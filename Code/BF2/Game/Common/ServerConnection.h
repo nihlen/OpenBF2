@@ -52,6 +52,11 @@ public:
     void  addScopableGhost(io::NetworkableDescriptor* descriptor, float range);
     void  clientSendPlayerDatabase();
     void  clientSendDatabase();                                  //  the join push
+    // [CHOSEN, not recovered] openbf2-server-ext docs/admin-channel.md R8. The first part of
+    // clientSendDatabase's body, split out unchanged: the create events for every dynamic networked
+    // object, each living player's vehicle and kit events, and the sticky projectiles.
+    // clientSendDatabase calls it first, so a join sends what it always did.
+    void  clientSendObjectDatabase();
 
 public:
     /* +0x17C */ int m_dword17C;        // = 0   [UNRESOLVED role]

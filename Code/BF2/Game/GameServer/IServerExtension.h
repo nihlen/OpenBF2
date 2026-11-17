@@ -409,6 +409,21 @@ public:
     virtual bool issueSquadOrder(int team, int squad, int orderId, unsigned short targetNetId,
                                  const float* points, bool commander) = 0;
 
+    // ---- R8 client resync (openbf2-server-ext docs/admin-channel.md R8) ----
+
+    /// Makes one playing client drop every dynamic object it holds and rebuild them from the server,
+    /// without a round restart. The client gets the event a round restart sends it (its own round
+    /// reset: it kills every player locally and destroys every object not created at map load),
+    /// then the object part of the join database (create events, each living player's vehicle and
+    /// kit, sticky projectiles), a spawn notice for each living player, the squad state and the game
+    /// status. The server's own state does not change: nobody dies and nothing is destroyed. The
+    /// server sends this client no object or control state until it has acknowledged the last of
+    /// these events. It removes objects the client holds that the server cannot address, such as
+    /// an object whose template has a networkable only on the server. Main thread only.
+    /// @return False when the player has no connection, the connection is not playing, is a demo
+    ///         recorder, or still waits for an earlier reset to be acknowledged.
+    virtual bool resyncClient(int playerId) = 0;
+
 protected:
     ~IServerExtension() {}
 };

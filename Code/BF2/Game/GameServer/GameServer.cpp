@@ -294,6 +294,7 @@ public:
     virtual bool sendRoundClock(int playerId, float secondsFromNow);                           // R7
     virtual bool issueSquadOrder(int team, int squad, int orderId, unsigned short targetNetId,
                                  const float* points, bool commander);                         // R7
+    virtual bool resyncClient(int playerId);                                                   // R8
 
 private:
     GameServer* m_server;
@@ -2687,6 +2688,73 @@ void GameServer::resetConnections()
     for (std::map<unsigned char, IClientConnection*>::iterator it = m_connections.begin();
          it != m_connections.end(); ++it)
         serverConnectionReset(it->second);
+}
+
+namespace {
+// [CHOSEN, not recovered] openbf2-server-ext docs/admin-channel.md R8. The last event of a
+// resyncClient replay. On the wire it is the game-status event clientSendDatabaseComplete sends
+// (PostRemoteEvent, ECGameLogic 1). Event blocks are confirmed in order, so its acknowledgement
+// means the client has every event of the replay; only then is the connection's reset latch set
+// again, as the client's own acknowledgement (ECNetwork 5) sets it after a round restart.
+class ResyncDoneEvent : public PostRemoteEvent
+{
+public:
+    explicit ResyncDoneEvent(int gameStatus) : PostRemoteEvent(ECGameLogic, 1, false, &gameStatus, 4, 0.0f) {}
+
+    virtual void eventReceivedByRemote(void* connectionId)
+    {
+        if (game)
+            game->confirmReset(*static_cast<int*>(connectionId));
+    }
+};
+} // namespace
+
+// [CHOSEN, not recovered] openbf2-server-ext docs/admin-channel.md R8. Each step is one the retail
+// server already takes: ServerGameLogic::reset sends ECGameLogic 6 and resets the connection, and
+// clientSendDatabase sends the object database. Here they run for one connection while the server's
+// world stays as it is.
+bool GameServer::ServerExtension::resyncClient(int playerId)
+{
+    if (!m_server || !gameLogic || !io::networkManager || !squadManager)
+        return false;
+    ServerConnection* const conn = asServerConnection(m_server->getClient(playerId));
+    if (!conn || conn->m_connectionState != 4 || !conn->m_bReset || conn->getIsRecordingConnection())
+        return false;
+
+    // The client's half of a round reset. isLocal false: the server must not run it.
+    conn->m_gameEventManager->addEvent(new PostRemoteEvent(ECGameLogic, 6, false, 0, 0, 0.0f));
+
+    // The client destroys every object the join database creates (network ids above 0x281), so none
+    // of them is ghostable for it until it has acknowledged the new create event (confirmGhost).
+    const std::map<unsigned short, io::NetworkableDescriptor*>& descriptors = io::networkManager->getDescriptorMap();
+    for (std::map<unsigned short, io::NetworkableDescriptor*>::const_iterator it = descriptors.begin();
+         it != descriptors.end(); ++it)
+    {
+        if (it->first <= 0x281)
+            continue;
+        if (world::IObject* const object = io::networkManager->getObject(it->first))
+            conn->updateGhostable(object, false);
+    }
+    serverConnectionReset(conn);          // no object or control state until the latch is set again
+
+    conn->clientSendObjectDatabase();
+
+    // "This player spawned" (ServerGameLogic::spawnPlayer's ECNetwork 9) for every living player: the
+    // client marked them all dead.
+    const std::list<world::IPlayer*>& players = world::playerManager->getPlayers();
+    for (std::list<world::IPlayer*>::const_iterator it = players.begin(); it != players.end(); ++it)
+    {
+        world::IPlayer* const player = *it;
+        if (!player->getIsAlive() || !player->getDefaultVehicle())
+            continue;
+        int spawnedId = player->getId();
+        conn->m_gameEventManager->addEvent(new PostRemoteEvent(ECNetwork, 9, false, &spawnedId, 4, 0.0f));
+    }
+
+    static_cast<ISquadManager*>(squadManager)->sendSquadManagerState(playerId);   // the client reset its squads
+
+    conn->m_gameEventManager->addEvent(new ResyncDoneEvent(gameLogic->getGameStatus()));
+    return true;
 }
 
 void GameServer::_sendGameEvent(unsigned int connectionId, GameEvent* event, bool connectedOnly, bool playingOnly)
