@@ -2989,6 +2989,11 @@ namespace memory { inline void nextPhysicFrame() {} }   // empty here, like next
                                                         //   the memory DLL's arena boundary (see BF2Engine.cpp)
 int g_collisionDumpFlag = 0;                            // ds:0x8ABA820 [UNRESOLVED name] - the physics side's
                                                         //   collision-dump flag; defined here until its TU is recovered
+// [CHOSEN, not recovered] Local serverext/r1 change, not for upstream (no issue). 0 keeps retail: a
+// connection is sent packets at its connection type's server rate (g_connectionTypes column 1, 20 Hz
+// for types 3-5). Above 0, every client connection is sent packets at this rate instead, at most 60
+// (the server's frame rate bounds it in practice). Read at each send, so it applies at once.
+int* const g_connPacketRate = Vars::getInt("conn-packet-rate", 0);
 } // namespace
 
 bool GameServer::simulateFrame(float dt)
@@ -3556,7 +3561,11 @@ void GameServer::processGameStateAndSendPackets(float dt)
         if (conn->m_timer1C <= 0.0f)
         {
             // one period back on the clock. m_dword14 is the rate in Hz - default 20.
-            conn->m_timer1C += 1.0f / static_cast<float>(conn->m_dword14);
+            // [CHOSEN, not recovered] conn-packet-rate replaces it when set (see its definition).
+            int rate = conn->m_dword14;
+            if (*g_connPacketRate > 0)
+                rate = *g_connPacketRate < 60 ? *g_connPacketRate : 60;
+            conn->m_timer1C += 1.0f / static_cast<float>(rate);
         }
 
         if (conn->m_connectionState == 4 && conn->m_bReset)
