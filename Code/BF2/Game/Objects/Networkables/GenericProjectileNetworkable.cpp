@@ -15,6 +15,8 @@
 #include "../GameLogicComp/ArmorGLComp.h"
 #include "../GameLogicComp/IArmorGLComp.h"            // predict's hit-point hand-over
 #include "../IObjectTemplate.h"                       // createObject - the interpolation proxy
+#include "../IPlayer.h"                               // [CHOSEN, not recovered] tv-path-lead -1: the gunner
+#include "../../GameLogic/ActionBuffer.h"             //   and his queued actions
 #include "../ObjectLayoutAccess.h"                    // + world::getRootParent via IObject.h
 #include "../../../Core/Debug.h"
 #include "../../../Core/Ids.h"
@@ -58,7 +60,9 @@ int* const g_tvCameraLead = Vars::getInt("tv-camera-lead", 0);
 // tick by tick. Every client draws a remote object its interpolation time behind the server, and
 // the gunner steers from that drawn view; this moves the drawn missile that much closer to the
 // present. A change of steering shows once the server's missile turns, as before, and the drawn
-// path then corrects over the following packets.
+// path then corrects over the following packets. -1: the gunner's own view lag, estimated as the
+// interpolation time his client reports minus one tick for each action waiting in his
+// ActionBuffer (view lag = I - Q ticks), averaged over about a second, at most 200 ms.
 int* const g_tvPathLead = Vars::getInt("tv-path-lead", 0);
 const float kTvLeadMaxRadians = 20.0f * 3.14159265f / 180.0f;
 
@@ -73,7 +77,7 @@ struct LeadResult
 // the previous tick's rotation for `pathTicks` ticks plus `cameraSeconds`. Position: moved on
 // `pathTicks` ticks along the last displacement, turned each tick by the last tick's rotation.
 LeadResult leadTvMissile(GenericProjectileNetworkable& n, unsigned int tick, Quat& rotation,
-                         const float rows[9], Vec3& position, float cameraSeconds, int pathTicks)
+                         const float rows[9], Vec3& position, float cameraSeconds, float pathTicks)
 {
     LeadResult result = { 0.0f, 0.0f };
     if (!n.m_leadPrimed)
@@ -105,7 +109,7 @@ LeadResult leadTvMissile(GenericProjectileNetworkable& n, unsigned int tick, Qua
         return result;
 
     // Position: only over a one-tick interval, where the per-tick rotation is the interval's.
-    if (pathTicks > 0 && steps == 1)
+    if (pathTicks > 0.0f && steps == 1)
     {
         // Row vectors: world = local x M, so W = Mprev^T x Mcur takes the previous tick's world
         // vectors to this tick's (Mprev's rows are orthonormal).
@@ -118,20 +122,21 @@ LeadResult leadTvMissile(GenericProjectileNetworkable& n, unsigned int tick, Qua
         float d[3] = { n.m_leadCurPos.x - n.m_leadPrevPos.x, n.m_leadCurPos.y - n.m_leadPrevPos.y,
                        n.m_leadCurPos.z - n.m_leadPrevPos.z };
         float p[3] = { position.x, position.y, position.z };
-        for (int t = 0; t < pathTicks; ++t)
+        for (float left = pathTicks; left > 0.0f; left -= 1.0f)
         {
             const float e[3] = { d[0] * w[0] + d[1] * w[3] + d[2] * w[6],
                                  d[0] * w[1] + d[1] * w[4] + d[2] * w[7],
                                  d[0] * w[2] + d[1] * w[5] + d[2] * w[8] };
             d[0] = e[0]; d[1] = e[1]; d[2] = e[2];
-            p[0] += d[0]; p[1] += d[1]; p[2] += d[2];
+            const float part = left < 1.0f ? left : 1.0f;    // the last tick may be a fraction
+            p[0] += part * d[0]; p[1] += part * d[1]; p[2] += part * d[2];
         }
         const float dx = p[0] - position.x, dy = p[1] - position.y, dz = p[2] - position.z;
         result.positionMetres = std::sqrt(dx * dx + dy * dy + dz * dz);
         position.x = p[0]; position.y = p[1]; position.z = p[2];
     }
     else
-        pathTicks = 0;
+        pathTicks = 0.0f;
 
     Quat from = n.m_leadPrev;
     const Quat& cur = n.m_leadCur;
@@ -145,7 +150,7 @@ LeadResult leadTvMissile(GenericProjectileNetworkable& n, unsigned int tick, Qua
     if (angle < 1e-5f)
         return result;
     const float interval = static_cast<float>(steps) * static_cast<float>(WorldPref::mTickTime);
-    float k = cameraSeconds / interval + static_cast<float>(pathTicks) / static_cast<float>(steps);
+    float k = cameraSeconds / interval + pathTicks / static_cast<float>(steps);
     if (angle * k > kTvLeadMaxRadians)
         k = kTvLeadMaxRadians / angle;
     if (k <= 0.0f)
@@ -273,6 +278,7 @@ GenericProjectileNetworkable::GenericProjectileNetworkable()
     m_predictTime = 0.0f;                            // +0x58 [CHOSEN] - see the create block
     m_leadPrimed = false;                            // [CHOSEN, not recovered] tv-camera-lead
     m_leadPrevTick = m_leadCurTick = 0;              //   and tv-path-lead
+    m_leadAutoMs = -1.0f;
 }
 
 // D2/D1 0x8237780/0x82377D0, 65 B: revector, delete[] the ring AND null it, chain.
@@ -380,6 +386,7 @@ void GenericProjectileNetworkable::reset()
     m_next = 0;
     m_predictTime = -1.0f;
     m_leadPrimed = false;                            // [CHOSEN, not recovered] tv-camera-lead
+    m_leadAutoMs = -1.0f;
     world::GenericProjectile* const projectile =
         static_cast<world::GenericProjectile*>(m_object);
     BF2_GPN_PRIME_RECORD(m_records[m_next], projectile);
@@ -466,8 +473,28 @@ void GenericProjectileNetworkable::updateStateMask(unsigned int* stateMask)
             && !projectile->getDetonate())   // a detonating projectile is sent where it is
         {
             const int cameraMs = *g_tvCameraLead < 0 ? 0 : (*g_tvCameraLead < 300 ? *g_tvCameraLead : 300);
-            const int pathMs = *g_tvPathLead < 0 ? 0 : (*g_tvPathLead < 200 ? *g_tvPathLead : 200);
-            const int pathTicks = static_cast<int>(pathMs / (1000.0 * WorldPref::mTickTime) + 0.5);
+            float pathMs = static_cast<float>(*g_tvPathLead < 200 ? *g_tvPathLead : 200);
+            if (*g_tvPathLead < 0)
+            {
+                // -1: the gunner's view lag, I - Q ticks, smoothed (about 1 s) so the lead does not
+                // step when actions arrive two at a time.
+                pathMs = 0.0f;
+                IPlayer* const gunner = projectile->getPlayer();
+                ActionBuffer* const buffer = gunner && !gunner->getIsAIPlayer() ? gunner->getActionBuffer() : 0;
+                if (buffer)
+                {
+                    const float tickMs = static_cast<float>(1000.0 * WorldPref::mTickTime);
+                    float lag = static_cast<float>(gunner->getInterpolationTime())
+                              - tickMs * static_cast<float>(buffer->size());
+                    lag = lag < 0.0f ? 0.0f : (lag > 200.0f ? 200.0f : lag);
+                    if (m_leadAutoMs < 0.0f || !m_leadPrimed)
+                        m_leadAutoMs = lag;
+                    else if (WorldPref::mTickCount != m_leadCurTick)
+                        m_leadAutoMs += (lag - m_leadAutoMs) * 0.033f;
+                    pathMs = m_leadAutoMs;
+                }
+            }
+            const float pathTicks = pathMs / static_cast<float>(1000.0 * WorldPref::mTickTime);
             const float rows[9] = { transform.m[0], transform.m[1], transform.m[2],
                                     transform.m[4], transform.m[5], transform.m[6],
                                     transform.m[8], transform.m[9], transform.m[10] };
@@ -533,11 +560,11 @@ void GenericProjectileNetworkable::updateStateMask(unsigned int* stateMask)
     if (world::tv_missile_trace::armed())
         world::tv_missile_trace::log(projectile, "snapshot",
             "launch_tick=%d mask=%u root=%u record=%u pos=%.9g,%.9g,%.9g "
-            "quat=%.9g,%.9g,%.9g,%.9g lead_deg=%.4g lead_m=%.4g",
+            "quat=%.9g,%.9g,%.9g,%.9g lead_deg=%.4g lead_m=%.4g lead_auto_ms=%.4g",
             projectile->m_dword1BC, *stateMask, (L::flags(projectile) & 0x01000000u) ? 1u : 0u,
             static_cast<unsigned int>(m_next), truePosition.x, truePosition.y, truePosition.z,
             rec->rotation.x, rec->rotation.y, rec->rotation.z, rec->rotation.w, lead.rotationDegrees,
-            lead.positionMetres);
+            lead.positionMetres, m_leadAutoMs);
 }
 
 // getNetUpdate - 0x8238020, 1,725 B - THE wire, sender side. See the file header for the map.

@@ -175,6 +175,7 @@ class GenericProjectileNetworkable : public io::NetworkableBase, public io::Netw
     unsigned int m_leadPrevTick;
     unsigned int m_leadCurTick;
     bool         m_leadPrimed;
+    float        m_leadAutoMs;                  // tv-path-lead -1: the smoothed gunner view lag, -1 unset
           virtual void reset();                                     // re-primes slot 0
           virtual void setGhostActive(bool);                        // unique to this class
           virtual float getAverageUpdateDeltaTime() const;
