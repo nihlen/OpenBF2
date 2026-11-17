@@ -298,8 +298,10 @@ void ServerConnection::clientSendDatabase()
 // clientSendDatabase, moved here so IServerExtension::resyncClient can send them to a client that
 // is already playing. Retail has one body; a join (ObjectDatabaseAll) runs both parts in the retail
 // order and takes none of the part tests below.
-void ServerConnection::clientSendObjectDatabase(ObjectDatabasePart part)
+unsigned short ServerConnection::clientSendObjectDatabase(ObjectDatabasePart part, unsigned short afterNetId,
+                                                         unsigned short upToNetId, int maxCreates)
 {
+    int creates = 0;                                               // [CHOSEN, not recovered] R8
     // Replay create events for dynamic descriptors. Static objects (netId <= 0x281)
     // already exist from map loading and are skipped.
     if (io::networkManager)                                        // ELF guards on the singleton too
@@ -332,9 +334,18 @@ void ServerConnection::clientSendObjectDatabase(ObjectDatabasePart part)
                 continue;
 
             // [CHOSEN, not recovered] R8: a negative base priority is a static ghost
-            // (NetworkManager::addDescriptor).
+            // (NetworkManager::addDescriptor). The static part is sent in slices by network id.
             if (part != ObjectDatabaseAll && (networkable->m_basePriority < 0.0f) != (part == ObjectDatabaseStatic))
                 continue;
+            if (part == ObjectDatabaseStatic)
+            {
+                if (it->first <= afterNetId || it->first > upToNetId)
+                    continue;
+                if (maxCreates >= 0 && creates >= maxCreates)
+                    return afterNetId;                             // the last one sent; more follow
+                afterNetId = it->first;
+                ++creates;
+            }
 
             const unsigned int classId = templ->getClassID();
             if (classId == world::CID_KitTemplate)
@@ -425,7 +436,7 @@ void ServerConnection::clientSendObjectDatabase(ObjectDatabasePart part)
     }
 
     if (part == ObjectDatabaseStatic)                              // [CHOSEN, not recovered] R8
-        return;
+        return 0;
 
     // phase B: per-player associations.
     const std::list<world::IPlayer*>& players = world::playerManager->getPlayers();
@@ -515,6 +526,7 @@ void ServerConnection::clientSendObjectDatabase(ObjectDatabasePart part)
             m_gameEventManager->addEvent(new StickyProjectileEvent(projectile, target, transform));
         }
     }
+    return 0;
 }
 
 // Resets ghost scopes, then selects objects relevant to the connection's camera and tools.

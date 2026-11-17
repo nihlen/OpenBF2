@@ -294,7 +294,8 @@ public:
     virtual bool sendRoundClock(int playerId, float secondsFromNow);                           // R7
     virtual bool issueSquadOrder(int team, int squad, int orderId, unsigned short targetNetId,
                                  const float* points, bool commander);                         // R7
-    virtual bool resyncClient(int playerId);                                                   // R8
+    virtual int resyncClient(int playerId);                                                    // R8
+    virtual int resyncClientStatics(int playerId, int afterNetId, int upToNetId, int maxCount); // R8
 
 private:
     GameServer* m_server;
@@ -2713,13 +2714,13 @@ public:
 // server already takes: ServerGameLogic::reset sends ECGameLogic 6 and resets the connection, and
 // clientSendDatabase sends the object database. Here they run for one connection while the server's
 // world stays as it is.
-bool GameServer::ServerExtension::resyncClient(int playerId)
+int GameServer::ServerExtension::resyncClient(int playerId)
 {
     if (!m_server || !gameLogic || !io::networkManager || !squadManager)
-        return false;
+        return 0;
     ServerConnection* const conn = asServerConnection(m_server->getClient(playerId));
     if (!conn || conn->m_connectionState != 4 || !conn->m_bReset || conn->getIsRecordingConnection())
-        return false;
+        return 0;
 
     // The client's half of a round reset. isLocal false: the server must not run it.
     conn->m_gameEventManager->addEvent(new PostRemoteEvent(ECGameLogic, 6, false, 0, 0, 0.0f));
@@ -2727,11 +2728,13 @@ bool GameServer::ServerExtension::resyncClient(int playerId)
     // The client destroys every object the join database creates (network ids above 0x281), so none
     // of them is ghostable for it until it has acknowledged the new create event (confirmGhost).
     const std::map<unsigned short, io::NetworkableDescriptor*>& descriptors = io::networkManager->getDescriptorMap();
+    int highestNetId = 0x281;
     for (std::map<unsigned short, io::NetworkableDescriptor*>::const_iterator it = descriptors.begin();
          it != descriptors.end(); ++it)
     {
         if (it->first <= 0x281)
             continue;
+        highestNetId = it->first;
         if (world::IObject* const object = io::networkManager->getObject(it->first))
             conn->updateGhostable(object, false);
     }
@@ -2756,12 +2759,30 @@ bool GameServer::ServerExtension::resyncClient(int playerId)
     static_cast<ISquadManager*>(squadManager)->sendSquadManagerState(playerId);   // the client reset its squads
 
     conn->m_gameEventManager->addEvent(new ResyncDoneEvent(gameLogic->getGameStatus()));
+    return highestNetId;
+}
 
-    // The static ghosts last, after the event that sets the latch: their create events can take
-    // seconds to deliver (about 360 a second at the retail packet size and rate), and each one is
-    // ghosted only when the client has acknowledged its create event.
-    conn->clientSendObjectDatabase(ServerConnection::ObjectDatabaseStatic);
-    return true;
+// [CHOSEN, not recovered] R8. The static ghosts' create events, in slices the caller paces. Sent all at
+// once they fill every packet for as long as they take (about 18 fit one 640-byte packet, and the
+// connection's stream managers share a packet without a budget, ClientConnection::transmitMsgs), and
+// the client gets no control state for its own vehicle meanwhile. Each object is ghosted only when
+// the client has acknowledged its create event (confirmGhost).
+int GameServer::ServerExtension::resyncClientStatics(int playerId, int afterNetId, int upToNetId, int maxCount)
+{
+    if (!m_server || !io::networkManager)
+        return -1;
+    ServerConnection* const conn = asServerConnection(m_server->getClient(playerId));
+    if (!conn || conn->m_connectionState != 4 || conn->getIsRecordingConnection())
+        return -1;
+    if (afterNetId < 0x281)
+        afterNetId = 0x281;
+    if (upToNetId > 0xFFFF)
+        upToNetId = 0xFFFF;
+    if (maxCount <= 0 || afterNetId >= upToNetId)
+        return 0;
+    return conn->clientSendObjectDatabase(ServerConnection::ObjectDatabaseStatic,
+                                          static_cast<unsigned short>(afterNetId),
+                                          static_cast<unsigned short>(upToNetId), maxCount);
 }
 
 void GameServer::_sendGameEvent(unsigned int connectionId, GameEvent* event, bool connectedOnly, bool playingOnly)

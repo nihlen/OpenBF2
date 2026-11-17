@@ -414,15 +414,29 @@ public:
     /// Makes one playing client drop every dynamic object it holds and rebuild them from the server,
     /// without a round restart. The client gets the event a round restart sends it (its own round
     /// reset: it kills every player locally and destroys every object not created at map load),
-    /// then the object part of the join database (create events, each living player's vehicle and
-    /// kit, sticky projectiles), a spawn notice for each living player, the squad state and the game
-    /// status. The server's own state does not change: nobody dies and nothing is destroyed. The
-    /// server sends this client no object or control state until it has acknowledged the last of
-    /// these events. It removes objects the client holds that the server cannot address, such as
-    /// an object whose template has a networkable only on the server. Main thread only.
-    /// @return False when the player has no connection, the connection is not playing, is a demo
+    /// then the object part of the join database without the static ghosts (create events, each
+    /// living player's vehicle and kit, sticky projectiles), a spawn notice for each living player,
+    /// the squad state and the game status. The server's own state does not change: nobody dies and
+    /// nothing is destroyed. The server sends this client no object or control state until it has
+    /// acknowledged the last of these events. The static ghosts (objects with a negative base
+    /// priority, such as spawned static objects) are not sent: the caller sends them with
+    /// resyncClientStatics, a few per tick, so their create events do not crowd the client's own
+    /// vehicle state out of the packets. The reset removes objects the client holds that the server
+    /// cannot address, such as an object whose template has a networkable only on the server.
+    /// Main thread only.
+    /// @return The highest networkable id in use, to pass to resyncClientStatics as upToNetId; 0
+    ///         when the player has no connection, the connection is not playing, is a demo
     ///         recorder, or still waits for an earlier reset to be acknowledged.
-    virtual bool resyncClient(int playerId) = 0;
+    virtual int resyncClient(int playerId) = 0;
+
+    /// Sends one client the create events of static ghosts with a networkable id above afterNetId
+    /// and up to upToNetId, in id order, at most maxCount of them. Objects created after
+    /// resyncClient have higher ids than upToNetId and were announced to the client when they were
+    /// created. Main thread only.
+    /// @return The networkable id of the last object sent when maxCount stopped it (call again with
+    ///         it as afterNetId), 0 when no more follow, -1 when the connection is gone or not
+    ///         playing.
+    virtual int resyncClientStatics(int playerId, int afterNetId, int upToNetId, int maxCount) = 0;
 
 protected:
     ~IServerExtension() {}

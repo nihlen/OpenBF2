@@ -56,11 +56,15 @@ public:
     // clientSendDatabase's body, split out: the create events for every dynamic networked object,
     // each living player's vehicle and kit events, and the sticky projectiles. clientSendDatabase
     // calls it with ObjectDatabaseAll first, so a join sends what it always did. The other two
-    // parts are for IServerExtension::resyncClient: ObjectDatabaseScoped leaves out the create
+    // parts are for IServerExtension's client resync: ObjectDatabaseScoped leaves out the create
     // events of objects with a negative base priority (static ghosts, such as spawned static
-    // objects), ObjectDatabaseStatic sends only those and no player or projectile events.
+    // objects); ObjectDatabaseStatic sends only those and no player or projectile events, for
+    // network ids above afterNetId and up to upToNetId, at most maxCreates of them (below 0: no
+    // limit). Returns the network id of the last create event sent when maxCreates stopped it, and
+    // 0 when it reached the end.
     enum ObjectDatabasePart { ObjectDatabaseAll, ObjectDatabaseScoped, ObjectDatabaseStatic };
-    void  clientSendObjectDatabase(ObjectDatabasePart part);
+    unsigned short clientSendObjectDatabase(ObjectDatabasePart part, unsigned short afterNetId = 0,
+                                            unsigned short upToNetId = 0xFFFF, int maxCreates = -1);
 
 public:
     /* +0x17C */ int m_dword17C;        // = 0   [UNRESOLVED role]
