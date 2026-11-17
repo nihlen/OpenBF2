@@ -469,7 +469,7 @@ void GenericProjectileNetworkable::updateStateMask(unsigned int* stateMask)
         rec->position.z = transform.m[14];
         truePosition = rec->position;
         // [CHOSEN, not recovered] tv-camera-lead and tv-path-lead (see their definitions).
-        if ((*g_tvCameraLead > 0 || *g_tvPathLead > 0) && projectile->m_projectileCamera && !L::parent(projectile)
+        if ((*g_tvCameraLead > 0 || *g_tvPathLead != 0) && projectile->m_projectileCamera && !L::parent(projectile)
             && !projectile->getDetonate())   // a detonating projectile is sent where it is
         {
             const int cameraMs = *g_tvCameraLead < 0 ? 0 : (*g_tvCameraLead < 300 ? *g_tvCameraLead : 300);
