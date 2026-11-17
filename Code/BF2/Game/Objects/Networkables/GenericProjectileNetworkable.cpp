@@ -45,37 +45,96 @@ float* const g_localPredictionMinDelay = Vars::getFloat("local-prediction-minDel
 // [CHOSEN, not recovered] Local serverext/r1 change, not for upstream (no issue). 0 keeps retail.
 // Above 0, the rotation the server sends for a projectile with a camera (a TV missile) is turned
 // ahead of its true rotation by its turn over the last tick times this many milliseconds, at most
-// 300 ms and 12 degrees. The client's missile camera follows the rotation it draws through a
+// 300 ms (and 20 degrees together with tv-path-lead). The client's missile camera follows the rotation it draws through a
 // first-order smoothing (followStiffness, blend dt x stiffness per frame), which trails a steady
 // turn by turn rate / stiffness; sending rotation + rate x (1 / stiffness) cancels that trail.
 // Only what is sent changes: the server's own transform, and so every hit, stays as it was.
 int* const g_tvCameraLead = Vars::getInt("tv-camera-lead", 0);
-const float kTvCameraLeadMaxRadians = 12.0f * 3.14159265f / 180.0f;
 
-// The rotation to send for true rotation `truth` snapshotted at tick `tick`: `truth` turned on
-// along the turn from the previous tick's rotation, for `leadSeconds`. Returns the lead in degrees.
-float leadRotation(Quat& prev, Quat& cur, unsigned int& prevTick, unsigned int& curTick, bool& primed,
-                   unsigned int tick, Quat& rotation, float leadSeconds)
+// [CHOSEN, not recovered] Local serverext/r1 change, not for upstream (no issue). 0 keeps retail.
+// Above 0, the position and rotation the server sends for a projectile with a camera are where the
+// projectile will be this many milliseconds later (whole ticks, at most 200 ms) if it keeps its
+// last tick's turn and speed: its last tick's displacement turned on by its last tick's rotation,
+// tick by tick. Every client draws a remote object its interpolation time behind the server, and
+// the gunner steers from that drawn view; this moves the drawn missile that much closer to the
+// present. A change of steering shows once the server's missile turns, as before, and the drawn
+// path then corrects over the following packets.
+int* const g_tvPathLead = Vars::getInt("tv-path-lead", 0);
+const float kTvLeadMaxRadians = 20.0f * 3.14159265f / 180.0f;
+
+struct LeadResult
 {
-    const Quat truth = rotation;
-    if (!primed)
+    float rotationDegrees;
+    float positionMetres;
+};
+
+// The rotation and position to send for the true ones snapshotted at tick `tick` (in `rotation`,
+// `rows` - the transform's 3x3 rows - and `position`). Rotation: turned on along the turn from
+// the previous tick's rotation for `pathTicks` ticks plus `cameraSeconds`. Position: moved on
+// `pathTicks` ticks along the last displacement, turned each tick by the last tick's rotation.
+LeadResult leadTvMissile(GenericProjectileNetworkable& n, unsigned int tick, Quat& rotation,
+                         const float rows[9], Vec3& position, float cameraSeconds, int pathTicks)
+{
+    LeadResult result = { 0.0f, 0.0f };
+    if (!n.m_leadPrimed)
     {
-        prev = cur = truth;
-        prevTick = curTick = tick;
-        primed = true;
-        return 0.0f;
+        n.m_leadPrev = n.m_leadCur = rotation;
+        for (int i = 0; i < 9; ++i)
+            n.m_leadPrevRows[i] = n.m_leadCurRows[i] = rows[i];
+        n.m_leadPrevPos = n.m_leadCurPos = position;
+        n.m_leadPrevTick = n.m_leadCurTick = tick;
+        n.m_leadPrimed = true;
+        return result;
     }
-    if (tick != curTick)
+    if (tick != n.m_leadCurTick)
     {
-        prev = cur;
-        prevTick = curTick;
-        curTick = tick;
+        n.m_leadPrev = n.m_leadCur;
+        for (int i = 0; i < 9; ++i)
+            n.m_leadPrevRows[i] = n.m_leadCurRows[i];
+        n.m_leadPrevPos = n.m_leadCurPos;
+        n.m_leadPrevTick = n.m_leadCurTick;
+        n.m_leadCurTick = tick;
     }
-    cur = truth;                                  // a second frame in one tick: the same rotation
-    const unsigned int steps = curTick - prevTick;
+    // a second frame in one tick: the same transform
+    n.m_leadCur = rotation;
+    for (int i = 0; i < 9; ++i)
+        n.m_leadCurRows[i] = rows[i];
+    n.m_leadCurPos = position;
+    const unsigned int steps = n.m_leadCurTick - n.m_leadPrevTick;
     if (steps == 0 || steps > 4)
-        return 0.0f;
-    Quat from = prev;
+        return result;
+
+    // Position: only over a one-tick interval, where the per-tick rotation is the interval's.
+    if (pathTicks > 0 && steps == 1)
+    {
+        // Row vectors: world = local x M, so W = Mprev^T x Mcur takes the previous tick's world
+        // vectors to this tick's (Mprev's rows are orthonormal).
+        float w[9];
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                w[i * 3 + j] = n.m_leadPrevRows[0 * 3 + i] * n.m_leadCurRows[0 * 3 + j]
+                             + n.m_leadPrevRows[1 * 3 + i] * n.m_leadCurRows[1 * 3 + j]
+                             + n.m_leadPrevRows[2 * 3 + i] * n.m_leadCurRows[2 * 3 + j];
+        float d[3] = { n.m_leadCurPos.x - n.m_leadPrevPos.x, n.m_leadCurPos.y - n.m_leadPrevPos.y,
+                       n.m_leadCurPos.z - n.m_leadPrevPos.z };
+        float p[3] = { position.x, position.y, position.z };
+        for (int t = 0; t < pathTicks; ++t)
+        {
+            const float e[3] = { d[0] * w[0] + d[1] * w[3] + d[2] * w[6],
+                                 d[0] * w[1] + d[1] * w[4] + d[2] * w[7],
+                                 d[0] * w[2] + d[1] * w[5] + d[2] * w[8] };
+            d[0] = e[0]; d[1] = e[1]; d[2] = e[2];
+            p[0] += d[0]; p[1] += d[1]; p[2] += d[2];
+        }
+        const float dx = p[0] - position.x, dy = p[1] - position.y, dz = p[2] - position.z;
+        result.positionMetres = std::sqrt(dx * dx + dy * dy + dz * dz);
+        position.x = p[0]; position.y = p[1]; position.z = p[2];
+    }
+    else
+        pathTicks = 0;
+
+    Quat from = n.m_leadPrev;
+    const Quat& cur = n.m_leadCur;
     float dot = from.x * cur.x + from.y * cur.y + from.z * cur.z + from.w * cur.w;
     if (dot < 0.0f)
     {
@@ -84,18 +143,22 @@ float leadRotation(Quat& prev, Quat& cur, unsigned int& prevTick, unsigned int& 
     }
     const float angle = 2.0f * std::acos(dot < 1.0f ? dot : 1.0f);   // radians over `steps` ticks
     if (angle < 1e-5f)
-        return 0.0f;
-    float k = leadSeconds / (static_cast<float>(steps) * static_cast<float>(WorldPref::mTickTime));
-    if (angle * k > kTvCameraLeadMaxRadians)
-        k = kTvCameraLeadMaxRadians / angle;
+        return result;
+    const float interval = static_cast<float>(steps) * static_cast<float>(WorldPref::mTickTime);
+    float k = cameraSeconds / interval + static_cast<float>(pathTicks) / static_cast<float>(steps);
+    if (angle * k > kTvLeadMaxRadians)
+        k = kTvLeadMaxRadians / angle;
+    if (k <= 0.0f)
+        return result;
     Quat led;
     led.x = 0.0f; led.y = 0.0f; led.z = 0.0f; led.w = 1.0f;
     led.slerp(from, cur, 1.0f + k);               // the sine form extrapolates past 1
-    const float n = std::sqrt(led.x * led.x + led.y * led.y + led.z * led.z + led.w * led.w);
-    if (n < 0.5f)
-        return 0.0f;
-    rotation.x = led.x / n; rotation.y = led.y / n; rotation.z = led.z / n; rotation.w = led.w / n;
-    return angle * k * 180.0f / 3.14159265f;
+    const float len = std::sqrt(led.x * led.x + led.y * led.y + led.z * led.z + led.w * led.w);
+    if (len < 0.5f)
+        return result;
+    rotation.x = led.x / len; rotation.y = led.y / len; rotation.z = led.z / len; rotation.w = led.w / len;
+    result.rotationDegrees = angle * k * 180.0f / 3.14159265f;
+    return result;
 }
 
 Vec3 projectileStatsColour()
@@ -209,7 +272,7 @@ GenericProjectileNetworkable::GenericProjectileNetworkable()
     m_records  = 0;                                  // +0x54
     m_predictTime = 0.0f;                            // +0x58 [CHOSEN] - see the create block
     m_leadPrimed = false;                            // [CHOSEN, not recovered] tv-camera-lead
-    m_leadPrevTick = m_leadCurTick = 0;
+    m_leadPrevTick = m_leadCurTick = 0;              //   and tv-path-lead
 }
 
 // D2/D1 0x8237780/0x82377D0, 65 B: revector, delete[] the ring AND null it, chain.
@@ -386,26 +449,34 @@ void GenericProjectileNetworkable::updateStateMask(unsigned int* stateMask)
 
     // the ELF's `test byte ptr [object+7], 1` = flags & LayoutAccess's documented
     // bit 24, "is a root". A parented (stuck) projectile skips the whole transform half.
-    float leadDegrees = 0.0f;                      // [CHOSEN, not recovered] tv-camera-lead
+    LeadResult lead = { 0.0f, 0.0f };              // [CHOSEN, not recovered] tv-camera-lead, tv-path-lead
+    Vec3 truePosition = rec->position;             // the trace logs the true position, not the sent one
     if (L::flags(projectile) & 0x01000000u)
     {
         const Mat4& transform = L::parent(projectile)
                                     ? projectile->getRelativeTransformation()
                                     : projectile->getAbsoluteTransformation();
         rec->rotation.fromMat(transform);
-        // [CHOSEN, not recovered] tv-camera-lead (see its definition).
-        if (*g_tvCameraLead > 0 && projectile->m_projectileCamera && !L::parent(projectile))
+        rec->position.x = transform.m[12];
+        rec->position.y = transform.m[13];
+        rec->position.z = transform.m[14];
+        truePosition = rec->position;
+        // [CHOSEN, not recovered] tv-camera-lead and tv-path-lead (see their definitions).
+        if ((*g_tvCameraLead > 0 || *g_tvPathLead > 0) && projectile->m_projectileCamera && !L::parent(projectile)
+            && !projectile->getDetonate())   // a detonating projectile is sent where it is
         {
-            const int ms = *g_tvCameraLead < 300 ? *g_tvCameraLead : 300;
-            leadDegrees = leadRotation(m_leadPrev, m_leadCur, m_leadPrevTick, m_leadCurTick, m_leadPrimed,
-                                       WorldPref::mTickCount, rec->rotation, ms / 1000.0f);
+            const int cameraMs = *g_tvCameraLead < 0 ? 0 : (*g_tvCameraLead < 300 ? *g_tvCameraLead : 300);
+            const int pathMs = *g_tvPathLead < 0 ? 0 : (*g_tvPathLead < 200 ? *g_tvPathLead : 200);
+            const int pathTicks = static_cast<int>(pathMs / (1000.0 * WorldPref::mTickTime) + 0.5);
+            const float rows[9] = { transform.m[0], transform.m[1], transform.m[2],
+                                    transform.m[4], transform.m[5], transform.m[6],
+                                    transform.m[8], transform.m[9], transform.m[10] };
+            lead = leadTvMissile(*this, WorldPref::mTickCount, rec->rotation, rows, rec->position,
+                                 cameraMs / 1000.0f, pathTicks);
         }
         if (std::memcmp(&rec->rotation, &prev->rotation, 0x10) != 0)
             *stateMask |= 0x1;
 
-        rec->position.x = transform.m[12];
-        rec->position.y = transform.m[13];
-        rec->position.z = transform.m[14];
         const bool same = std::fabs(rec->position.x - prev->position.x) <= eps
                        && std::fabs(rec->position.y - prev->position.y) <= eps
                        && std::fabs(rec->position.z - prev->position.z) <= eps;
@@ -462,10 +533,11 @@ void GenericProjectileNetworkable::updateStateMask(unsigned int* stateMask)
     if (world::tv_missile_trace::armed())
         world::tv_missile_trace::log(projectile, "snapshot",
             "launch_tick=%d mask=%u root=%u record=%u pos=%.9g,%.9g,%.9g "
-            "quat=%.9g,%.9g,%.9g,%.9g lead_deg=%.4g",
+            "quat=%.9g,%.9g,%.9g,%.9g lead_deg=%.4g lead_m=%.4g",
             projectile->m_dword1BC, *stateMask, (L::flags(projectile) & 0x01000000u) ? 1u : 0u,
-            static_cast<unsigned int>(m_next), rec->position.x, rec->position.y, rec->position.z,
-            rec->rotation.x, rec->rotation.y, rec->rotation.z, rec->rotation.w, leadDegrees);
+            static_cast<unsigned int>(m_next), truePosition.x, truePosition.y, truePosition.z,
+            rec->rotation.x, rec->rotation.y, rec->rotation.z, rec->rotation.w, lead.rotationDegrees,
+            lead.positionMetres);
 }
 
 // getNetUpdate - 0x8238020, 1,725 B - THE wire, sender side. See the file header for the map.
