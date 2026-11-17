@@ -2737,7 +2737,9 @@ bool GameServer::ServerExtension::resyncClient(int playerId)
     }
     serverConnectionReset(conn);          // no object or control state until the latch is set again
 
-    conn->clientSendObjectDatabase();
+    // Everything a player sits in or sees move first, so the client has its own vehicle back with
+    // the first packets however many static objects follow.
+    conn->clientSendObjectDatabase(ServerConnection::ObjectDatabaseScoped);
 
     // "This player spawned" (ServerGameLogic::spawnPlayer's ECNetwork 9) for every living player: the
     // client marked them all dead.
@@ -2754,6 +2756,11 @@ bool GameServer::ServerExtension::resyncClient(int playerId)
     static_cast<ISquadManager*>(squadManager)->sendSquadManagerState(playerId);   // the client reset its squads
 
     conn->m_gameEventManager->addEvent(new ResyncDoneEvent(gameLogic->getGameStatus()));
+
+    // The static ghosts last, after the event that sets the latch: their create events can take
+    // seconds to deliver (about 360 a second at the retail packet size and rate), and each one is
+    // ghosted only when the client has acknowledged its create event.
+    conn->clientSendObjectDatabase(ServerConnection::ObjectDatabaseStatic);
     return true;
 }
 

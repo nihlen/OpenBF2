@@ -272,7 +272,7 @@ void ServerConnection::clientSendPlayerDatabase()
 // Called after the connection enters state 2.
 void ServerConnection::clientSendDatabase()
 {
-    clientSendObjectDatabase();
+    clientSendObjectDatabase(ObjectDatabaseAll);
 
     // phase D: the ELF builds two Triggerable lists here and immediately clears them without
     // sending anything; omitted as observably empty.
@@ -295,9 +295,10 @@ void ServerConnection::clientSendDatabase()
 }
 
 // [CHOSEN, not recovered] openbf2-server-ext docs/admin-channel.md R8. Phases A to C of
-// clientSendDatabase, moved here unchanged so IServerExtension::resyncClient can send them to a
-// client that is already playing. Retail has one body; a join runs both parts in the retail order.
-void ServerConnection::clientSendObjectDatabase()
+// clientSendDatabase, moved here so IServerExtension::resyncClient can send them to a client that
+// is already playing. Retail has one body; a join (ObjectDatabaseAll) runs both parts in the retail
+// order and takes none of the part tests below.
+void ServerConnection::clientSendObjectDatabase(ObjectDatabasePart part)
 {
     // Replay create events for dynamic descriptors. Static objects (netId <= 0x281)
     // already exist from map loading and are skipped.
@@ -328,6 +329,11 @@ void ServerConnection::clientSendObjectDatabase()
             if (!templ)
                 continue;
             if (networkable->m_networkableId <= 0x281)            // pre-stored/static - already on the client
+                continue;
+
+            // [CHOSEN, not recovered] R8: a negative base priority is a static ghost
+            // (NetworkManager::addDescriptor).
+            if (part != ObjectDatabaseAll && (networkable->m_basePriority < 0.0f) != (part == ObjectDatabaseStatic))
                 continue;
 
             const unsigned int classId = templ->getClassID();
@@ -417,6 +423,9 @@ void ServerConnection::clientSendObjectDatabase()
 
         }
     }
+
+    if (part == ObjectDatabaseStatic)                              // [CHOSEN, not recovered] R8
+        return;
 
     // phase B: per-player associations.
     const std::list<world::IPlayer*>& players = world::playerManager->getPlayers();

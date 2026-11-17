@@ -53,10 +53,14 @@ public:
     void  clientSendPlayerDatabase();
     void  clientSendDatabase();                                  //  the join push
     // [CHOSEN, not recovered] openbf2-server-ext docs/admin-channel.md R8. The first part of
-    // clientSendDatabase's body, split out unchanged: the create events for every dynamic networked
-    // object, each living player's vehicle and kit events, and the sticky projectiles.
-    // clientSendDatabase calls it first, so a join sends what it always did.
-    void  clientSendObjectDatabase();
+    // clientSendDatabase's body, split out: the create events for every dynamic networked object,
+    // each living player's vehicle and kit events, and the sticky projectiles. clientSendDatabase
+    // calls it with ObjectDatabaseAll first, so a join sends what it always did. The other two
+    // parts are for IServerExtension::resyncClient: ObjectDatabaseScoped leaves out the create
+    // events of objects with a negative base priority (static ghosts, such as spawned static
+    // objects), ObjectDatabaseStatic sends only those and no player or projectile events.
+    enum ObjectDatabasePart { ObjectDatabaseAll, ObjectDatabaseScoped, ObjectDatabaseStatic };
+    void  clientSendObjectDatabase(ObjectDatabasePart part);
 
 public:
     /* +0x17C */ int m_dword17C;        // = 0   [UNRESOLVED role]
