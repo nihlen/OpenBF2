@@ -42,6 +42,62 @@ namespace {
 float* const g_localPredictionLerpTime = Vars::getFloat("local-prediction-lerpTime", 1.0f);
 float* const g_localPredictionMinDelay = Vars::getFloat("local-prediction-minDelay", 0.15f);
 
+// [CHOSEN, not recovered] Local serverext/r1 change, not for upstream (no issue). 0 keeps retail.
+// Above 0, the rotation the server sends for a projectile with a camera (a TV missile) is turned
+// ahead of its true rotation by its turn over the last tick times this many milliseconds, at most
+// 300 ms and 12 degrees. The client's missile camera follows the rotation it draws through a
+// first-order smoothing (followStiffness, blend dt x stiffness per frame), which trails a steady
+// turn by turn rate / stiffness; sending rotation + rate x (1 / stiffness) cancels that trail.
+// Only what is sent changes: the server's own transform, and so every hit, stays as it was.
+int* const g_tvCameraLead = Vars::getInt("tv-camera-lead", 0);
+const float kTvCameraLeadMaxRadians = 12.0f * 3.14159265f / 180.0f;
+
+// The rotation to send for true rotation `truth` snapshotted at tick `tick`: `truth` turned on
+// along the turn from the previous tick's rotation, for `leadSeconds`. Returns the lead in degrees.
+float leadRotation(Quat& prev, Quat& cur, unsigned int& prevTick, unsigned int& curTick, bool& primed,
+                   unsigned int tick, Quat& rotation, float leadSeconds)
+{
+    const Quat truth = rotation;
+    if (!primed)
+    {
+        prev = cur = truth;
+        prevTick = curTick = tick;
+        primed = true;
+        return 0.0f;
+    }
+    if (tick != curTick)
+    {
+        prev = cur;
+        prevTick = curTick;
+        curTick = tick;
+    }
+    cur = truth;                                  // a second frame in one tick: the same rotation
+    const unsigned int steps = curTick - prevTick;
+    if (steps == 0 || steps > 4)
+        return 0.0f;
+    Quat from = prev;
+    float dot = from.x * cur.x + from.y * cur.y + from.z * cur.z + from.w * cur.w;
+    if (dot < 0.0f)
+    {
+        from.x = -from.x; from.y = -from.y; from.z = -from.z; from.w = -from.w;
+        dot = -dot;
+    }
+    const float angle = 2.0f * std::acos(dot < 1.0f ? dot : 1.0f);   // radians over `steps` ticks
+    if (angle < 1e-5f)
+        return 0.0f;
+    float k = leadSeconds / (static_cast<float>(steps) * static_cast<float>(WorldPref::mTickTime));
+    if (angle * k > kTvCameraLeadMaxRadians)
+        k = kTvCameraLeadMaxRadians / angle;
+    Quat led;
+    led.x = 0.0f; led.y = 0.0f; led.z = 0.0f; led.w = 1.0f;
+    led.slerp(from, cur, 1.0f + k);               // the sine form extrapolates past 1
+    const float n = std::sqrt(led.x * led.x + led.y * led.y + led.z * led.z + led.w * led.w);
+    if (n < 0.5f)
+        return 0.0f;
+    rotation.x = led.x / n; rotation.y = led.y / n; rotation.z = led.z / n; rotation.w = led.w / n;
+    return angle * k * 180.0f / 3.14159265f;
+}
+
 Vec3 projectileStatsColour()
 {
     Vec3 c; c.x = 0.0f; c.y = 250.0f; c.z = 0.0f;
@@ -152,6 +208,8 @@ GenericProjectileNetworkable::GenericProjectileNetworkable()
     m_refCount = 1;                                  // +0x50
     m_records  = 0;                                  // +0x54
     m_predictTime = 0.0f;                            // +0x58 [CHOSEN] - see the create block
+    m_leadPrimed = false;                            // [CHOSEN, not recovered] tv-camera-lead
+    m_leadPrevTick = m_leadCurTick = 0;
 }
 
 // D2/D1 0x8237780/0x82377D0, 65 B: revector, delete[] the ring AND null it, chain.
@@ -258,6 +316,7 @@ void GenericProjectileNetworkable::reset()
     io::NetworkableBase::reset();
     m_next = 0;
     m_predictTime = -1.0f;
+    m_leadPrimed = false;                            // [CHOSEN, not recovered] tv-camera-lead
     world::GenericProjectile* const projectile =
         static_cast<world::GenericProjectile*>(m_object);
     BF2_GPN_PRIME_RECORD(m_records[m_next], projectile);
@@ -327,12 +386,20 @@ void GenericProjectileNetworkable::updateStateMask(unsigned int* stateMask)
 
     // the ELF's `test byte ptr [object+7], 1` = flags & LayoutAccess's documented
     // bit 24, "is a root". A parented (stuck) projectile skips the whole transform half.
+    float leadDegrees = 0.0f;                      // [CHOSEN, not recovered] tv-camera-lead
     if (L::flags(projectile) & 0x01000000u)
     {
         const Mat4& transform = L::parent(projectile)
                                     ? projectile->getRelativeTransformation()
                                     : projectile->getAbsoluteTransformation();
         rec->rotation.fromMat(transform);
+        // [CHOSEN, not recovered] tv-camera-lead (see its definition).
+        if (*g_tvCameraLead > 0 && projectile->m_projectileCamera && !L::parent(projectile))
+        {
+            const int ms = *g_tvCameraLead < 300 ? *g_tvCameraLead : 300;
+            leadDegrees = leadRotation(m_leadPrev, m_leadCur, m_leadPrevTick, m_leadCurTick, m_leadPrimed,
+                                       WorldPref::mTickCount, rec->rotation, ms / 1000.0f);
+        }
         if (std::memcmp(&rec->rotation, &prev->rotation, 0x10) != 0)
             *stateMask |= 0x1;
 
@@ -395,10 +462,10 @@ void GenericProjectileNetworkable::updateStateMask(unsigned int* stateMask)
     if (world::tv_missile_trace::armed())
         world::tv_missile_trace::log(projectile, "snapshot",
             "launch_tick=%d mask=%u root=%u record=%u pos=%.9g,%.9g,%.9g "
-            "quat=%.9g,%.9g,%.9g,%.9g",
+            "quat=%.9g,%.9g,%.9g,%.9g lead_deg=%.4g",
             projectile->m_dword1BC, *stateMask, (L::flags(projectile) & 0x01000000u) ? 1u : 0u,
             static_cast<unsigned int>(m_next), rec->position.x, rec->position.y, rec->position.z,
-            rec->rotation.x, rec->rotation.y, rec->rotation.z, rec->rotation.w);
+            rec->rotation.x, rec->rotation.y, rec->rotation.z, rec->rotation.w, leadDegrees);
 }
 
 // getNetUpdate - 0x8238020, 1,725 B - THE wire, sender side. See the file header for the map.

@@ -163,6 +163,13 @@ class GenericProjectileNetworkable : public io::NetworkableBase, public io::Netw
     /* +0x54 */ Record* m_records;                  // [4] - operator new[](0x140), init()
     // Prediction timestamp reset to -1; predict latches the first pass time.
     /* +0x58 */ float   m_predictTime;              // [INFERRED name]
+    // [CHOSEN, not recovered] tv-camera-lead: the projectile's true rotation at the last two
+    // ticks it was snapshotted in (GenericProjectileNetworkable.cpp).
+    Quat         m_leadPrev;
+    Quat         m_leadCur;
+    unsigned int m_leadPrevTick;
+    unsigned int m_leadCurTick;
+    bool         m_leadPrimed;
           virtual void reset();                                     // re-primes slot 0
           virtual void setGhostActive(bool);                        // unique to this class
           virtual float getAverageUpdateDeltaTime() const;
