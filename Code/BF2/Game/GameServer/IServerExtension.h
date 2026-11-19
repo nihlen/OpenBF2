@@ -438,6 +438,17 @@ public:
     ///         playing.
     virtual int resyncClientStatics(int playerId, int afterNetId, int upToNetId, int maxCount) = 0;
 
+    // ---- R9 projectile replay (openbf2-server-ext docs/admin-channel.md R9) ----
+
+    /// Starts a projectile's flight effects on every client without starting it on the server: sends
+    /// the MissileInitEvent a launch sends, naming a player id that no player has. Each client
+    /// activates its copy (its trail and looping sound start; it does not collide and never detonates
+    /// on its own) and, finding no player, sets no launcher, owner or camera. Meant for a projectile
+    /// the server created without a launcher (IGame::createObjectOnAllClients), which the caller moves
+    /// by its transform. Send it in the tick the projectile was created in or later. Main thread only.
+    /// @return False when netId names no projectile or every player id is in use.
+    virtual bool activateProjectileOnClients(unsigned short netId) = 0;
+
 protected:
     ~IServerExtension() {}
 };

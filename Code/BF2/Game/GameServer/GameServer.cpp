@@ -14,6 +14,7 @@
 #include "../../Physics/LatencyCompensation.h"          // [CHOSEN, not recovered] getLagCompensation, tv-hitbox
 #include "../GameEvents/BeginRoundEvent.h"              // [CHOSEN, not recovered] R7 sendRoundClock
 #include "../GameLogic/SquadManager/SquadOrder.h"       // [CHOSEN, not recovered] R7 issueSquadOrder
+#include "../GameEvents/MissileInitEvent.h"             // [CHOSEN, not recovered] R9 activateProjectileOnClients
 #include "VoipServerConnection.h"
 #include "ClientInfo.h"                    // handleDataBlock parses a block-id-1 payload into one
 #include "../Persistence/AntiHacks.h"      // handleClientInfo's ranked name-hash record
@@ -296,6 +297,7 @@ public:
                                  const float* points, bool commander);                         // R7
     virtual int resyncClient(int playerId);                                                    // R8
     virtual int resyncClientStatics(int playerId, int afterNetId, int upToNetId, int maxCount); // R8
+    virtual bool activateProjectileOnClients(unsigned short netId);                            // R9
 
 private:
     GameServer* m_server;
@@ -2783,6 +2785,27 @@ int GameServer::ServerExtension::resyncClientStatics(int playerId, int afterNetI
     return conn->clientSendObjectDatabase(ServerConnection::ObjectDatabaseStatic,
                                           static_cast<unsigned short>(afterNetId),
                                           static_cast<unsigned short>(upToNetId), maxCount);
+}
+
+// [CHOSEN, not recovered] R9. The event a launch sends (GenericProjectile::sendMissileInitEvent), with a
+// player id that names no player: MissileInitEvent::executeClient activates the client's copy before it
+// looks the player up, and returns when there is none, so no launcher, owner or camera is set. The
+// server's projectile is left as it is. A client that does not hold the networkable ignores the event;
+// one that holds a non-projectile under it would abort, hence the projectile check here.
+bool GameServer::ServerExtension::activateProjectileOnClients(unsigned short netId)
+{
+    if (!m_server || !io::networkManager || !netId)
+        return false;
+    world::IObject* const object = io::networkManager->getObject(netId);
+    if (!object || !object->queryInterface(world::IID_IProjectileObject))
+        return false;
+    int nobody = 255;
+    while (nobody >= 0 && world::playerManager->getPlayerFromId(nobody))
+        --nobody;
+    if (nobody < 0)
+        return false;
+    game->sendGameEventToAllConnected(new MissileInitEvent(netId, nobody, 0, false));
+    return true;
 }
 
 void GameServer::_sendGameEvent(unsigned int connectionId, GameEvent* event, bool connectedOnly, bool playingOnly)
